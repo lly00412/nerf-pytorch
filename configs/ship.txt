@@ -1,6 +1,6 @@
-expname = blender_paper_ship
+expname = fewshotb_blender_paper_ship
 basedir = ./logs
-datadir = ./data/nerf_synthetic/ship
+datadir = /mnt/Data2/datasets/nerf_synthetic/ship
 dataset_type = blender
 
 no_batching = True
@@ -17,3 +17,10 @@ precrop_iters = 500
 precrop_frac = 0.5
 
 half_res = True
+
+entropy = True
+N_entropy = 0
+entropy_ray_zvals_lambda = 0.001
+
+fewshot = 4
+train_scene = [26, 86, 2, 55]

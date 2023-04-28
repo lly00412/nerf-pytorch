@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from pytorch_msssim import ssim, ms_ssim
 
 
 # Misc
@@ -10,6 +11,26 @@ img2mse = lambda x, y : torch.mean((x - y) ** 2)
 mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
 to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
 
+
+def correlation_coefficient(x,y):
+    x_bar = torch.mean(x)
+    y_bar = torch.mean(y)
+    xy_sum = torch.sum((x-x_bar)*(y-y_bar))
+    x_sum = torch.sum(((x-x_bar)**2))
+    y_sum = torch.sum(((y-y_bar)**2))
+    r = xy_sum / torch.sqrt(x_sum*y_sum)
+    return r.item()
+
+def img2ssim(x, y, mask=None):
+    if mask is not None:
+        x = mask.unsqueeze(-1) * x
+        y = mask.unsqueeze(-1) * y
+
+    x = x.permute(0, 3, 1, 2)
+    y = y.permute(0, 3, 1, 2)
+    ssim_ = ssim(x, y, data_range=1)
+    ms_ssim_ = ms_ssim(x, y, data_range=1)
+    return ssim_, ms_ssim_
 
 # Positional encoding (section 5.1)
 class Embedder:

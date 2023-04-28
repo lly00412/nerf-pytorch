@@ -12,11 +12,15 @@ from tqdm import tqdm, trange
 import matplotlib.pyplot as plt
 
 from run_nerf_helpers import *
+from opt import *
 
 from load_llff import load_llff_data
 from load_deepvoxels import load_dv_data
 from load_blender import load_blender_data
 from load_LINEMOD import load_LINEMOD_data
+from torch.utils.tensorboard import SummaryWriter
+
+from entropy_loss import *
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -146,16 +150,22 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 
     rgbs = []
     disps = []
+    accs = []
+    others = []
 
     t = time.time()
     for i, c2w in enumerate(tqdm(render_poses)):
         print(i, time.time() - t)
         t = time.time()
-        rgb, disp, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
+        rgb, disp, acc, extra = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
         rgbs.append(rgb.cpu().numpy())
         disps.append(disp.cpu().numpy())
+        accs.append(disp.cpu().numpy())
+        others.append(extra)
+
+
         if i==0:
-            print(rgb.shape, disp.shape)
+            print(rgb.shape, disp.shape, acc.shape)
 
         """
         if gt_imgs is not None and render_factor==0:
@@ -171,8 +181,14 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 
     rgbs = np.stack(rgbs, 0)
     disps = np.stack(disps, 0)
+    accs = np.stack(accs, 0)
+    extras = {}
 
-    return rgbs, disps
+    for k in others[-1].keys():
+        k_values = [extra[k].cpu().numpy() for extra in others]
+        extras[k] = np.stack(k_values,0)
+
+    return rgbs, disps, accs, extras
 
 
 def create_nerf(args):
@@ -255,11 +271,12 @@ def create_nerf(args):
     render_kwargs_test = {k : render_kwargs_train[k] for k in render_kwargs_train}
     render_kwargs_test['perturb'] = False
     render_kwargs_test['raw_noise_std'] = 0.
+    render_kwargs_test['out_others'] = True
 
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
 
-def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False):
+def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False,out_others=False):
     """Transforms model's predictions to semantically meaningful values.
     Args:
         raw: [num_rays, num_samples along ray, 4]. Prediction from model.
@@ -291,6 +308,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
             noise = torch.Tensor(noise)
 
     alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, N_samples]
+    sigma = F.relu(raw[..., 3] + noise)
     # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
     weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]
     rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [N_rays, 3]
@@ -301,6 +319,13 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
 
     if white_bkgd:
         rgb_map = rgb_map + (1.-acc_map[...,None])
+
+    others = {}
+    if out_others:
+        others['alpha'] = alpha
+        others['sigma'] = sigma
+        others['dists'] = dists
+        return rgb_map, disp_map, acc_map, weights, depth_map, others
 
     return rgb_map, disp_map, acc_map, weights, depth_map
 
@@ -317,7 +342,8 @@ def render_rays(ray_batch,
                 white_bkgd=False,
                 raw_noise_std=0.,
                 verbose=False,
-                pytest=False):
+                pytest=False,
+                out_others=False):
     """Volumetric rendering.
     Args:
       ray_batch: array of shape [batch_size, ...]. All information necessary
@@ -328,7 +354,7 @@ def render_rays(ray_batch,
       network_query_fn: function used for passing queries to network_fn.
       N_samples: int. Number of different times to sample along each ray.
       retraw: bool. If True, include model's raw, unprocessed predictions.
-      lindisp: bool. If True, sample linearly in inverse depth rather than in depth.
+      lindisp: bool. If True, sample linearly in inverse depth rather than in dfepth.
       perturb: float, 0 or 1. If non-zero, each ray is sampled at stratified
         random points in time.
       N_importance: int. Number of additional times to sample along each ray.
@@ -399,10 +425,19 @@ def render_rays(ray_batch,
         run_fn = network_fn if network_fine is None else network_fine
 #         raw = run_network(pts, fn=run_fn)
         raw = network_query_fn(pts, viewdirs, run_fn)
-
-        rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
-
+        if out_others:
+            rgb_map, disp_map, acc_map, weights, depth_map,others = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest,out_others=True)
+        else:
+            rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std,
+                                                                                 white_bkgd, pytest=pytest)
     ret = {'rgb_map' : rgb_map, 'disp_map' : disp_map, 'acc_map' : acc_map}
+
+    if out_others:
+        ret['sigma'] = others['sigma']
+        ret['alpha'] = others['alpha']
+        ret['z_vals'] = z_vals
+        ret['dists'] = others['dists']
+
     if retraw:
         ret['raw'] = raw
     if N_importance > 0:
@@ -418,123 +453,11 @@ def render_rays(ray_batch,
     return ret
 
 
-def config_parser():
-
-    import configargparse
-    parser = configargparse.ArgumentParser()
-    parser.add_argument('--config', is_config_file=True, 
-                        help='config file path')
-    parser.add_argument("--expname", type=str, 
-                        help='experiment name')
-    parser.add_argument("--basedir", type=str, default='./logs/', 
-                        help='where to store ckpts and logs')
-    parser.add_argument("--datadir", type=str, default='./data/llff/fern', 
-                        help='input data directory')
-
-    # training options
-    parser.add_argument("--netdepth", type=int, default=8, 
-                        help='layers in network')
-    parser.add_argument("--netwidth", type=int, default=256, 
-                        help='channels per layer')
-    parser.add_argument("--netdepth_fine", type=int, default=8, 
-                        help='layers in fine network')
-    parser.add_argument("--netwidth_fine", type=int, default=256, 
-                        help='channels per layer in fine network')
-    parser.add_argument("--N_rand", type=int, default=32*32*4, 
-                        help='batch size (number of random rays per gradient step)')
-    parser.add_argument("--lrate", type=float, default=5e-4, 
-                        help='learning rate')
-    parser.add_argument("--lrate_decay", type=int, default=250, 
-                        help='exponential learning rate decay (in 1000 steps)')
-    parser.add_argument("--chunk", type=int, default=1024*32, 
-                        help='number of rays processed in parallel, decrease if running out of memory')
-    parser.add_argument("--netchunk", type=int, default=1024*64, 
-                        help='number of pts sent through network in parallel, decrease if running out of memory')
-    parser.add_argument("--no_batching", action='store_true', 
-                        help='only take random rays from 1 image at a time')
-    parser.add_argument("--no_reload", action='store_true', 
-                        help='do not reload weights from saved ckpt')
-    parser.add_argument("--ft_path", type=str, default=None, 
-                        help='specific weights npy file to reload for coarse network')
-
-    # rendering options
-    parser.add_argument("--N_samples", type=int, default=64, 
-                        help='number of coarse samples per ray')
-    parser.add_argument("--N_importance", type=int, default=0,
-                        help='number of additional fine samples per ray')
-    parser.add_argument("--perturb", type=float, default=1.,
-                        help='set to 0. for no jitter, 1. for jitter')
-    parser.add_argument("--use_viewdirs", action='store_true', 
-                        help='use full 5D input instead of 3D')
-    parser.add_argument("--i_embed", type=int, default=0, 
-                        help='set 0 for default positional encoding, -1 for none')
-    parser.add_argument("--multires", type=int, default=10, 
-                        help='log2 of max freq for positional encoding (3D location)')
-    parser.add_argument("--multires_views", type=int, default=4, 
-                        help='log2 of max freq for positional encoding (2D direction)')
-    parser.add_argument("--raw_noise_std", type=float, default=0., 
-                        help='std dev of noise added to regularize sigma_a output, 1e0 recommended')
-
-    parser.add_argument("--render_only", action='store_true', 
-                        help='do not optimize, reload weights and render out render_poses path')
-    parser.add_argument("--render_test", action='store_true', 
-                        help='render the test set instead of render_poses path')
-    parser.add_argument("--render_factor", type=int, default=0, 
-                        help='downsampling factor to speed up rendering, set 4 or 8 for fast preview')
-
-    # training options
-    parser.add_argument("--precrop_iters", type=int, default=0,
-                        help='number of steps to train on central crops')
-    parser.add_argument("--precrop_frac", type=float,
-                        default=.5, help='fraction of img taken for central crops') 
-
-    # dataset options
-    parser.add_argument("--dataset_type", type=str, default='llff', 
-                        help='options: llff / blender / deepvoxels')
-    parser.add_argument("--testskip", type=int, default=8, 
-                        help='will load 1/N images from test/val sets, useful for large datasets like deepvoxels')
-
-    ## deepvoxels flags
-    parser.add_argument("--shape", type=str, default='greek', 
-                        help='options : armchair / cube / greek / vase')
-
-    ## blender flags
-    parser.add_argument("--white_bkgd", action='store_true', 
-                        help='set to render synthetic data on a white bkgd (always use for dvoxels)')
-    parser.add_argument("--half_res", action='store_true', 
-                        help='load blender synthetic data at 400x400 instead of 800x800')
-
-    ## llff flags
-    parser.add_argument("--factor", type=int, default=8, 
-                        help='downsample factor for LLFF images')
-    parser.add_argument("--no_ndc", action='store_true', 
-                        help='do not use normalized device coordinates (set for non-forward facing scenes)')
-    parser.add_argument("--lindisp", action='store_true', 
-                        help='sampling linearly in disparity rather than depth')
-    parser.add_argument("--spherify", action='store_true', 
-                        help='set for spherical 360 scenes')
-    parser.add_argument("--llffhold", type=int, default=8, 
-                        help='will take every 1/N images as LLFF test set, paper uses 8')
-
-    # logging/saving options
-    parser.add_argument("--i_print",   type=int, default=100, 
-                        help='frequency of console printout and metric loggin')
-    parser.add_argument("--i_img",     type=int, default=500, 
-                        help='frequency of tensorboard image logging')
-    parser.add_argument("--i_weights", type=int, default=10000, 
-                        help='frequency of weight ckpt saving')
-    parser.add_argument("--i_testset", type=int, default=50000, 
-                        help='frequency of testset saving')
-    parser.add_argument("--i_video",   type=int, default=50000, 
-                        help='frequency of render_poses video saving')
-
-    return parser
-
-
 def train():
 
     parser = config_parser()
     args = parser.parse_args()
+    logger = SummaryWriter(os.path.join(args.basedir, args.expname,'summaries'))
 
     # Load data
     K = None
@@ -555,6 +478,7 @@ def train():
         i_val = i_test
         i_train = np.array([i for i in np.arange(int(images.shape[0])) if
                         (i not in i_test and i not in i_val)])
+
 
         print('DEFINING BOUNDS')
         if args.no_ndc:
@@ -606,6 +530,16 @@ def train():
     else:
         print('Unknown dataset type', args.dataset_type, 'exiting')
         return
+
+    ### few-shot setting
+
+    if args.train_scene is None:
+        if args.fewshot > 0:
+            np.random.seed(args.fewshot_seed)
+            i_train = np.random.choice(i_train, args.fewshot, replace=False)
+    else:
+        i_train = np.array([i for i in args.train_scene if
+                            (i not in i_test and i not in i_val)])
 
     # Cast intrinsics to right types
     H, W, focal = hwf
@@ -665,7 +599,7 @@ def train():
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', render_poses.shape)
 
-            rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
+            rgbs, _, _,_ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
             print('Done rendering', testsavedir)
             imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
 
@@ -673,6 +607,11 @@ def train():
 
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand
+
+    if args.entropy:
+        N_entropy = args.N_entropy
+        entropy_loss = EntropyLoss(args)
+
     use_batching = not args.no_batching
     if use_batching:
         # For random ray batching
@@ -698,7 +637,7 @@ def train():
         rays_rgb = torch.Tensor(rays_rgb).to(device)
 
 
-    N_iters = 200000 + 1
+    N_iters = args.N_iters + 1
     print('Begin')
     print('TRAIN views are', i_train)
     print('TEST views are', i_test)
@@ -708,6 +647,11 @@ def train():
     # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
     
     start = start + 1
+
+    if args.eval_only:
+        N_iters = start + 2
+        args.i_testset = 1
+
     for i in trange(start, N_iters):
         time0 = time.time()
 
@@ -802,11 +746,12 @@ def train():
         if i%args.i_video==0 and i > 0:
             # Turn on testing mode
             with torch.no_grad():
-                rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
+                rgbs, disps, accs,extras = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
             print('Done, saving', rgbs.shape, disps.shape)
             moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
             imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
-            imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
+            imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.nanmax(disps)), fps=30, quality=8)
+            imageio.mimwrite(moviebase + 'acc.mp4', to8b(accs), fps=30, quality=8)
 
             # if args.use_viewdirs:
             #     render_kwargs_test['c2w_staticcam'] = render_poses[0][:3,:4]
@@ -820,13 +765,66 @@ def train():
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', poses[i_test].shape)
             with torch.no_grad():
-                render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir)
+                test_rgbs, test_disps, test_accs, test_extras = render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir)
+
+            test_loss = img2mse(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]))
+            test_psnr = mse2psnr(test_loss)
+            test_ssim, test_msssim = img2ssim(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]))
+            test_alpha_all = torch.Tensor(test_extras['alpha']).view(-1,test_extras['alpha'].shape[-1])
+            test_accs_all = torch.Tensor(test_accs).view(-1)
+            test_entropy_ray_zvals = entropy_loss.ray_zvals_per_ray(test_alpha_all,test_accs_all)
+            test_errors = (torch.Tensor(test_rgbs) - torch.Tensor(images[i_test]))**2
+            test_errors = test_errors.sum(axis=-1).view(-1)
+
+            coefficient = correlation_coefficient(test_entropy_ray_zvals,test_errors)
+
+            logger.add_scalar('TEST/loss', test_loss, global_step)
+            logger.add_scalar('TEST/psnr', test_psnr, global_step)
+            logger.add_scalar('TEST/ssim', test_ssim, global_step)
+            logger.add_scalar('TEST/ms_ssim', test_msssim, global_step)
+            logger.add_scalar('TEST/coefficient_entropy_errors',coefficient, global_step)
+
+            handout_id = np.random.choice(test_rgbs.shape[0])
+
+            logger.add_image('TEST/rgb', to8b(test_rgbs[handout_id]), global_step, dataformats='HWC')
+            logger.add_image('TEST/disp', to8b(test_disps[handout_id] / np.nanmax(test_disps[-1])), global_step, dataformats='HW')
+            logger.add_image('TEST/acc', to8b(test_accs[handout_id]), global_step, dataformats='HW')
+            logger.add_image('TEST/gt_image', to8b(images[i_test][handout_id]), global_step, dataformats='HWC')
+
+            logger.add_histogram('TEST/errors',test_errors[test_entropy_ray_zvals>0],global_step)
+            logger.add_histogram('TEST/entropy', test_entropy_ray_zvals[test_entropy_ray_zvals>0], global_step)
+
             print('Saved test set')
 
 
     
         if i%args.i_print==0:
-            tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}")
+            tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()} Time: {dt}")
+            logger.add_scalar('TRAIN/loss', loss, global_step)
+            logger.add_scalar('TRAIN/psnr', psnr,global_step)
+            if args.N_importance > 0:
+                logger.add_scalar('TRAIN/psnr0', psnr0,global_step)
+
+            if i % args.i_img == 0:
+                img_i = np.random.choice(i_val)
+                target = images[img_i][None,...]
+                pose = torch.Tensor(poses[img_i])[None,...]
+                with torch.no_grad():
+                    rgb, disp, acc,_ = render_path(pose.to(device), hwf, K, args.chunk, render_kwargs_train,gt_imgs=target)
+
+                psnr = mse2psnr(img2mse(torch.Tensor(rgb), torch.Tensor(target)))
+                ssim,ms_ssim = img2ssim(torch.Tensor(rgb),torch.Tensor(target))
+
+                logger.add_image('TRAIN/rgb', to8b(rgb[-1]),global_step,dataformats='HWC')
+                logger.add_image('TRAIN/disp', to8b(disp[-1]/np.nanmax(disp[-1])),global_step,dataformats='HW')
+                logger.add_image('TRAIN/acc', to8b(acc[-1]),global_step,dataformats='HW')
+                logger.add_image('TRAIN/gt_image',to8b(target[-1]),global_step,dataformats='HWC')
+
+                logger.add_scalar('TRAIN/psnr_holdout', psnr,global_step)
+                logger.add_scalar('TRAIN/ssim_holdout', ssim, global_step)
+                logger.add_scalar('TRAIN/ms_ssim_holdout', ms_ssim, global_step)
+
+
         """
             print(expname, i, psnr.numpy(), loss.numpy(), global_step.numpy())
             print('iter time {:.05f}'.format(dt))
@@ -837,7 +835,6 @@ def train():
                 tf.contrib.summary.histogram('tran', trans)
                 if args.N_importance > 0:
                     tf.contrib.summary.scalar('psnr0', psnr0)
-
 
             if i%args.i_img==0:
 
