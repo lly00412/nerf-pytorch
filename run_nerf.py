@@ -747,11 +747,17 @@ def train():
             # Turn on testing mode
             with torch.no_grad():
                 rgbs, disps, accs,extras = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
+            alpha_all = torch.Tensor(extras['alpha']).view(-1, extras['alpha'].shape[-1])  # 【N_rays. N_samples]
+            accs_all = torch.Tensor(accs).view(-1)
+            entropy_ray_zvals = entropy_loss.ray_zvals_per_ray(alpha_all, accs_all)
+            entropy_maps = entropy_ray_zvals.view(disps.shape).cpu().numpy()
+
             print('Done, saving', rgbs.shape, disps.shape)
             moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
             imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.nanmax(disps)), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'acc.mp4', to8b(accs), fps=30, quality=8)
+            imageio.mimwrite(moviebase + 'entropy.mp4', to8b(entropy_maps / np.nanmax(entropy_maps)), fps=30, quality=8)
 
             # if args.use_viewdirs:
             #     render_kwargs_test['c2w_staticcam'] = render_poses[0][:3,:4]
@@ -770,7 +776,7 @@ def train():
             test_loss = img2mse(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]))
             test_psnr = mse2psnr(test_loss)
             test_ssim, test_msssim = img2ssim(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]))
-            test_alpha_all = torch.Tensor(test_extras['alpha']).view(-1,test_extras['alpha'].shape[-1])
+            test_alpha_all = torch.Tensor(test_extras['alpha']).view(-1,test_extras['alpha'].shape[-1]) # 【N_rays. N_samples]
             test_accs_all = torch.Tensor(test_accs).view(-1)
             test_entropy_ray_zvals = entropy_loss.ray_zvals_per_ray(test_alpha_all,test_accs_all)
             test_errors = (torch.Tensor(test_rgbs) - torch.Tensor(images[i_test]))**2
@@ -818,7 +824,7 @@ def train():
                 logger.add_image('TRAIN/rgb', to8b(rgb[-1]),global_step,dataformats='HWC')
                 logger.add_image('TRAIN/disp', to8b(disp[-1]/np.nanmax(disp[-1])),global_step,dataformats='HW')
                 logger.add_image('TRAIN/acc', to8b(acc[-1]),global_step,dataformats='HW')
-                logger.add_image('TRAIN/gt_image',to8b(target[-1]),global_step,dataformats='HWC')
+                logger.add_image('TRAIN/gt_image',to8b(target[-1].cpu().numpy()),global_step,dataformats='HWC')
 
                 logger.add_scalar('TRAIN/psnr_holdout', psnr,global_step)
                 logger.add_scalar('TRAIN/ssim_holdout', ssim, global_step)
