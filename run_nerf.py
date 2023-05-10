@@ -194,6 +194,7 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 def create_nerf(args):
     """Instantiate NeRF's MLP model.
     """
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.device_id)[1:-1]
     embed_fn, input_ch = get_embedder(args.multires, args.i_embed)
 
     input_ch_views = 0
@@ -204,14 +205,18 @@ def create_nerf(args):
     skips = [4]
     model = NeRF(D=args.netdepth, W=args.netwidth,
                  input_ch=input_ch, output_ch=output_ch, skips=skips,
-                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
+    # model = nn.DataParallel(model)
+    model.to(device)
     grad_vars = list(model.parameters())
 
     model_fine = None
     if args.N_importance > 0:
         model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
                           input_ch=input_ch, output_ch=output_ch, skips=skips,
-                          input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+                          input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
+        # model_fine = nn.DataParallel(model_fine)
+        model_fine.to(device)
         grad_vars += list(model_fine.parameters())
 
     network_query_fn = lambda inputs, viewdirs, network_fn : run_network(inputs, viewdirs, network_fn,
@@ -746,11 +751,39 @@ def train():
         if i%args.i_video==0 and i > 0:
             # Turn on testing mode
             with torch.no_grad():
-                rgbs, disps, accs,extras = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
-            alpha_all = torch.Tensor(extras['alpha']).view(-1, extras['alpha'].shape[-1])  # 【N_rays. N_samples]
-            accs_all = torch.Tensor(accs).view(-1)
-            entropy_ray_zvals = entropy_loss.ray_zvals_per_ray(alpha_all, accs_all)
-            entropy_maps = entropy_ray_zvals.view(disps.shape).cpu().numpy()
+                N_poses = len(render_poses)
+                rgbs = []
+                disps = []
+                accs = []
+                others = []
+                entropy_maps = []
+                for i_batch in range(0,N_poses,20):
+                    batch_rgbs, batch_disps, batch_accs, batch_extras = render_path(render_poses[i_batch:i_batch+20], hwf, K, args.chunk, render_kwargs_test)
+                    rgbs.append(batch_rgbs)
+                    disps.append(batch_disps)
+                    accs.append(batch_accs)
+                    others.append(batch_extras)
+
+                    batch_alpha_all = torch.Tensor(batch_extras['alpha']).view(-1, batch_extras['alpha'].shape[-1])
+                    batch_accs_all = torch.Tensor(batch_accs).view(-1)
+                    batch_entropy_ray_zvals = entropy_loss.ray_zvals_per_ray(batch_alpha_all, batch_accs_all)
+                    batch_entropy_maps = batch_entropy_ray_zvals.view(batch_disps.shape).cpu().numpy()
+                    entropy_maps.append(batch_entropy_maps)
+
+                rgbs = np.concatenate(rgbs, 0)
+                disps = np.concatenate(disps, 0)
+                accs = np.concatenate(accs, 0)
+                entropy_maps = np.concatenate(entropy_maps,0)
+                extras = {}
+
+                for k in others[-1].keys():
+                    k_values = [extra[k] for extra in others]
+                    extras[k] = np.concatenate(k_values, 0)
+                # rgbs, disps, accs,extras = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
+            # alpha_all = torch.Tensor(extras['alpha']).view(-1, extras['alpha'].shape[-1])  # 【N_rays. N_samples]
+            # accs_all = torch.Tensor(accs).view(-1)
+            # entropy_ray_zvals = entropy_loss.ray_zvals_per_ray(alpha_all, accs_all)
+            # entropy_maps = entropy_ray_zvals.view(disps.shape).cpu().numpy()
 
             print('Done, saving', rgbs.shape, disps.shape)
             moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
@@ -758,6 +791,7 @@ def train():
             imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.nanmax(disps)), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'acc.mp4', to8b(accs), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'entropy.mp4', to8b(entropy_maps / np.nanmax(entropy_maps)), fps=30, quality=8)
+            # imageio.mimwrite(moviebase + 'errors.mp4', to8b(errors.cpu().numpy()), fps=30, quality=8)
 
             # if args.use_viewdirs:
             #     render_kwargs_test['c2w_staticcam'] = render_poses[0][:3,:4]
@@ -780,9 +814,10 @@ def train():
             test_accs_all = torch.Tensor(test_accs).view(-1)
             test_entropy_ray_zvals = entropy_loss.ray_zvals_per_ray(test_alpha_all,test_accs_all)
             test_errors = (torch.Tensor(test_rgbs) - torch.Tensor(images[i_test]))**2
-            test_errors = test_errors.sum(axis=-1).view(-1)
+            test_errors = test_errors.mean(axis=-1)
+            test_mse = test_errors.view(-1)
 
-            coefficient = correlation_coefficient(test_entropy_ray_zvals,test_errors)
+            coefficient = correlation_coefficient(test_entropy_ray_zvals,test_mse)
 
             logger.add_scalar('TEST/loss', test_loss, global_step)
             logger.add_scalar('TEST/psnr', test_psnr, global_step)
@@ -791,14 +826,41 @@ def train():
             logger.add_scalar('TEST/coefficient_entropy_errors',coefficient, global_step)
 
             handout_id = np.random.choice(test_rgbs.shape[0])
+            test_errors = test_errors.cpu().numpy()
+            test_entropy_maps = test_entropy_ray_zvals.view(test_disps.shape).cpu().numpy()
 
             logger.add_image('TEST/rgb', to8b(test_rgbs[handout_id]), global_step, dataformats='HWC')
             logger.add_image('TEST/disp', to8b(test_disps[handout_id] / np.nanmax(test_disps[-1])), global_step, dataformats='HW')
             logger.add_image('TEST/acc', to8b(test_accs[handout_id]), global_step, dataformats='HW')
-            logger.add_image('TEST/gt_image', to8b(images[i_test][handout_id]), global_step, dataformats='HWC')
+            logger.add_image('TEST/gt_image', to8b(images[i_test][handout_id].cpu().numpy()), global_step, dataformats='HWC')
 
             logger.add_histogram('TEST/errors',test_errors[test_entropy_ray_zvals>0],global_step)
             logger.add_histogram('TEST/entropy', test_entropy_ray_zvals[test_entropy_ray_zvals>0], global_step)
+
+            for i in range(len(test_disps)):
+                disp8 = to8b(test_disps[i])
+                disp_filename = os.path.join(testsavedir, 'disp_{:03d}.png'.format(i))
+                imageio.imwrite(disp_filename, disp8)
+
+                acc8 = to8b(test_accs[i])
+                acc_filename = os.path.join(testsavedir, 'acc_{:03d}.png'.format(i))
+                imageio.imwrite(acc_filename, acc8)
+
+                acc8 = to8b(test_accs[i])
+                acc_filename = os.path.join(testsavedir, 'acc_{:03d}.png'.format(i))
+                imageio.imwrite(acc_filename, acc8)
+
+                gt8 = to8b(images[i_test][i].cpu().numpy())
+                gt_filename = os.path.join(testsavedir, 'gt_{:03d}.png'.format(i))
+                imageio.imwrite(gt_filename, gt8)
+
+                err8 = to8b(test_errors[i])
+                err_filename = os.path.join(testsavedir, 'err_{:03d}.png'.format(i))
+                imageio.imwrite(err_filename, err8)
+
+                entropy8 = to8b(test_entropy_maps[i])
+                entropy_filename = os.path.join(testsavedir, 'entropy_{:03d}.png'.format(i))
+                imageio.imwrite(entropy_filename, entropy8)
 
             print('Saved test set')
 

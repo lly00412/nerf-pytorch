@@ -12,6 +12,7 @@ def config_parser():
                         help='input data directory')
 
     # training options
+    parser.add_argument('--device_id', default=[0], type=int, nargs='+', help='gpu indices')
     parser.add_argument("--N_iters", type=int, default=200000,
                         help='number of iters')
     parser.add_argument("--netdepth", type=int, default=8,
