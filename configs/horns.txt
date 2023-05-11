@@ -1,4 +1,4 @@
-expname = horns_test
+expname = llff_horns
 basedir = ./logs
 datadir = /mnt/Data2/datasets/nerf_llff_data/horns
 dataset_type = llff
@@ -13,3 +13,8 @@ N_importance = 64
 use_viewdirs = True
 raw_noise_std = 1e0
 
+entropy = True
+N_entropy = 0
+entropy_ray_zvals_lambda = 0.001
+
+device_id = [0]

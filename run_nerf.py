@@ -21,7 +21,7 @@ from load_LINEMOD import load_LINEMOD_data
 from torch.utils.tensorboard import SummaryWriter
 
 from entropy_loss import *
-
+from visualization import *
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 np.random.seed(0)
@@ -648,6 +648,12 @@ def train():
     print('TEST views are', i_test)
     print('VAL views are', i_val)
 
+    f = os.path.join(basedir, expname, 'args.txt')
+    with open(f, 'w') as file:
+        file.write('{} = {}\n'.format('train_scene', i_train))
+        file.write('{} = {}\n'.format('test_scene', i_test))
+        file.write('{} = {}\n'.format('val_scene', i_val))
+
     # Summary writers
     # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
     
@@ -826,15 +832,20 @@ def train():
             logger.add_scalar('TEST/coefficient_entropy_errors',coefficient, global_step)
 
             handout_id = np.random.choice(test_rgbs.shape[0])
-            test_errors = test_errors.cpu().numpy()
+            with torch.no_grad():
+                test_errors = color_error_image_func()(test_errors.cpu())
+                test_errors = test_errors.cpu().numpy()
             test_entropy_maps = test_entropy_ray_zvals.view(test_disps.shape).cpu().numpy()
 
             logger.add_image('TEST/rgb', to8b(test_rgbs[handout_id]), global_step, dataformats='HWC')
             logger.add_image('TEST/disp', to8b(test_disps[handout_id] / np.nanmax(test_disps[-1])), global_step, dataformats='HW')
             logger.add_image('TEST/acc', to8b(test_accs[handout_id]), global_step, dataformats='HW')
             logger.add_image('TEST/gt_image', to8b(images[i_test][handout_id].cpu().numpy()), global_step, dataformats='HWC')
+            logger.add_image('TEST/err', to8b(test_errors[handout_id]), global_step, dataformats='HWC')
 
-            logger.add_histogram('TEST/errors',test_errors[test_entropy_ray_zvals>0],global_step)
+            test_entropy_ray_zvals = test_entropy_ray_zvals.cpu()
+            test_mse = test_mse.cpu()
+            logger.add_histogram('TEST/errors',test_mse[test_entropy_ray_zvals>0],global_step)
             logger.add_histogram('TEST/entropy', test_entropy_ray_zvals[test_entropy_ray_zvals>0], global_step)
 
             for i in range(len(test_disps)):
@@ -880,13 +891,22 @@ def train():
                 with torch.no_grad():
                     rgb, disp, acc,_ = render_path(pose.to(device), hwf, K, args.chunk, render_kwargs_train,gt_imgs=target)
 
+
                 psnr = mse2psnr(img2mse(torch.Tensor(rgb), torch.Tensor(target)))
                 ssim,ms_ssim = img2ssim(torch.Tensor(rgb),torch.Tensor(target))
+
+                err = (torch.Tensor(rgb) - torch.Tensor(target)) ** 2
+                err = err.mean(axis=-1)
+                with torch.no_grad():
+                    err = color_error_image_func()(err.cpu())
+                    err = err.cpu().numpy()
+
 
                 logger.add_image('TRAIN/rgb', to8b(rgb[-1]),global_step,dataformats='HWC')
                 logger.add_image('TRAIN/disp', to8b(disp[-1]/np.nanmax(disp[-1])),global_step,dataformats='HW')
                 logger.add_image('TRAIN/acc', to8b(acc[-1]),global_step,dataformats='HW')
                 logger.add_image('TRAIN/gt_image',to8b(target[-1].cpu().numpy()),global_step,dataformats='HWC')
+                logger.add_image('TRAIN/err', to8b(err[-1]), global_step, dataformats='HWC')
 
                 logger.add_scalar('TRAIN/psnr_holdout', psnr,global_step)
                 logger.add_scalar('TRAIN/ssim_holdout', ssim, global_step)

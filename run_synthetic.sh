@@ -1,6 +1,6 @@
 #python run_nerf.py --config configs/lego.txt
-python run_nerf.py --config configs/chair.txt --eval_only
-python run_nerf.py --config configs/lego.txt --eval_only
-python run_nerf.py --config configs/drums.txt --eval_only
-python run_nerf.py --config configs/ship.txt --eval_only
-python run_nerf.py --config configs/ficus.txt --eval_only
+python run_nerf.py --config configs/horns.txt
+python run_nerf.py --config configs/trex.txt
+python run_nerf.py --config configs/room.txt --expname llff_room_few --fewshot 5
+python run_nerf.py --config configs/horns.txt --expname llff_horns_few --fewshot 5
+python run_nerf.py --config configs/trex.txt --expname llff_trex_few --fewshot 5

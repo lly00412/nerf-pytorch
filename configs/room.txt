@@ -1,4 +1,4 @@
-expname = room_test
+expname = llff_room
 basedir = ./logs
 datadir = /mnt/Data2/datasets/nerf_llff_data/room
 dataset_type = llff
@@ -18,5 +18,3 @@ N_entropy = 0
 entropy_ray_zvals_lambda = 0.001
 
 device_id = [0]
-
-eval_only = True
