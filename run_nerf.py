@@ -794,7 +794,7 @@ def train():
             print('Done, saving', rgbs.shape, disps.shape)
             moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
             imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
-            imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.nanmax(disps)), fps=30, quality=8)
+            imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'acc.mp4', to8b(accs), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'entropy.mp4', to8b(entropy_maps / np.nanmax(entropy_maps)), fps=30, quality=8)
             # imageio.mimwrite(moviebase + 'errors.mp4', to8b(errors.cpu().numpy()), fps=30, quality=8)
@@ -832,13 +832,14 @@ def train():
             logger.add_scalar('TEST/coefficient_entropy_errors',coefficient, global_step)
 
             handout_id = np.random.choice(test_rgbs.shape[0])
+            test_entropy_maps = test_entropy_ray_zvals.view(test_disps.shape).cpu()
             with torch.no_grad():
-                test_errors = color_error_image_func()(test_errors.cpu())
+                test_errors = color_error_image_func()(test_errors.cpu(),torch.Tensor(images[i_test]).mean(axis=-1))
                 test_errors = test_errors.cpu().numpy()
-            test_entropy_maps = test_entropy_ray_zvals.view(test_disps.shape).cpu().numpy()
+                test_entropy_maps = color_error_image_func()(test_entropy_maps).cpu().numpy()
 
             logger.add_image('TEST/rgb', to8b(test_rgbs[handout_id]), global_step, dataformats='HWC')
-            logger.add_image('TEST/disp', to8b(test_disps[handout_id] / np.nanmax(test_disps[-1])), global_step, dataformats='HW')
+            logger.add_image('TEST/disp', to8b(test_disps[handout_id] / np.max(test_disps[-1])), global_step, dataformats='HW')
             logger.add_image('TEST/acc', to8b(test_accs[handout_id]), global_step, dataformats='HW')
             logger.add_image('TEST/gt_image', to8b(images[i_test][handout_id].cpu().numpy()), global_step, dataformats='HWC')
             logger.add_image('TEST/err', to8b(test_errors[handout_id]), global_step, dataformats='HWC')
@@ -848,14 +849,10 @@ def train():
             logger.add_histogram('TEST/errors',test_mse[test_entropy_ray_zvals>0],global_step)
             logger.add_histogram('TEST/entropy', test_entropy_ray_zvals[test_entropy_ray_zvals>0], global_step)
 
-            for i in range(len(test_disps)):
-                disp8 = to8b(test_disps[i])
+            for i in range(len(i_test)):
+                disp8 = to8b(test_disps[i]/np.max(test_disps[i]))
                 disp_filename = os.path.join(testsavedir, 'disp_{:03d}.png'.format(i))
                 imageio.imwrite(disp_filename, disp8)
-
-                acc8 = to8b(test_accs[i])
-                acc_filename = os.path.join(testsavedir, 'acc_{:03d}.png'.format(i))
-                imageio.imwrite(acc_filename, acc8)
 
                 acc8 = to8b(test_accs[i])
                 acc_filename = os.path.join(testsavedir, 'acc_{:03d}.png'.format(i))
@@ -898,12 +895,11 @@ def train():
                 err = (torch.Tensor(rgb) - torch.Tensor(target)) ** 2
                 err = err.mean(axis=-1)
                 with torch.no_grad():
-                    err = color_error_image_func()(err.cpu())
+                    err = color_error_image_func()(err.cpu(),torch.Tensor(target).mean(axis=-1))
                     err = err.cpu().numpy()
 
-
                 logger.add_image('TRAIN/rgb', to8b(rgb[-1]),global_step,dataformats='HWC')
-                logger.add_image('TRAIN/disp', to8b(disp[-1]/np.nanmax(disp[-1])),global_step,dataformats='HW')
+                logger.add_image('TRAIN/disp', to8b(disp[-1]/np.max(disp[-1])),global_step,dataformats='HW')
                 logger.add_image('TRAIN/acc', to8b(acc[-1]),global_step,dataformats='HW')
                 logger.add_image('TRAIN/gt_image',to8b(target[-1].cpu().numpy()),global_step,dataformats='HWC')
                 logger.add_image('TRAIN/err', to8b(err[-1]), global_step, dataformats='HWC')

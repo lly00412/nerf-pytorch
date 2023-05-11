@@ -24,17 +24,22 @@ error_colormap = gen_error_colormap()
 
 
 class color_error_image_func(nn.Module):
-    def forward(self, D_err_tensor,abs_thres=3. ,rel_thres=0.05, dilate_radius=1):
+    def forward(self, D_err_tensor, D_gt_tensor=None, dilate_radius=1):
         D_err_np = D_err_tensor.detach().cpu().numpy()
         B, H, W = D_err_np.shape
         # error in percentage. When error <= 1, the pixel is valid since <= 3px & 5%
-        error = np.minimum(D_err_np / abs_thres, D_err_np / rel_thres)
+        # error = np.minimum(D_err_np / abs_thres, D_err_np / rel_thres)
+        if D_gt_tensor is not None:
+            D_gt_np = D_gt_tensor.detach().cpu().numpy()
+            err_prob = D_err_np / (D_gt_np+1e-5)
+        else:
+            err_prob = D_err_np / (np.max(D_err_np)+1e-5)
         # get colormap
         cols = error_colormap
         # create error image
         error_image = np.zeros([B, H, W, 3], dtype=np.float32)
         for i in range(cols.shape[0]):
-            error_image[np.logical_and(error >= cols[i][0], error < cols[i][1])] = cols[i, 2:]
+            error_image[np.logical_and(err_prob >= cols[i][0], err_prob < cols[i][1])] = cols[i, 2:]
         # TODO: imdilate
         # error_image = cv2.imdilate(D_err, strel('disk', dilate_radius));
         # show color tag in the top-left cornor of the image
