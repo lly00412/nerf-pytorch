@@ -837,42 +837,50 @@ def train():
             handout_id = np.random.choice(test_rgbs.shape[0])
             test_entropy_maps = test_entropy_ray_zvals.view(test_disps.shape).cpu()
             with torch.no_grad():
-                test_errors = color_error_image_func()(test_errors.cpu(),torch.Tensor(images[i_test]).mean(axis=-1))
-                test_errors = test_errors.cpu().numpy()
-                test_entropy_maps = color_error_image_func()(test_entropy_maps).cpu().numpy()
+                test_errors_color = color_error_image_func()(test_errors.cpu(),torch.Tensor(images[i_test]).mean(axis=-1))
+                test_errors_color = test_errors_color.cpu().numpy()
+                test_entropy_maps_color = color_error_image_func()(test_entropy_maps).cpu().numpy()
 
             logger.add_image('TEST/rgb', to8b(test_rgbs[handout_id]), global_step, dataformats='HWC')
             logger.add_image('TEST/disp', to8b((test_disps[handout_id] / np.quantile(test_disps[-1],0.9))*0.8), global_step, dataformats='HW')
             logger.add_image('TEST/acc', to8b(test_accs[handout_id]), global_step, dataformats='HW')
             logger.add_image('TEST/gt_image', to8b(images[i_test][handout_id].cpu().numpy()), global_step, dataformats='HWC')
-            logger.add_image('TEST/err', to8b(test_errors[handout_id]), global_step, dataformats='HWC')
+            logger.add_image('TEST/err', to8b(test_errors_color[handout_id]), global_step, dataformats='HWC')
 
             test_entropy_ray_zvals = test_entropy_ray_zvals.cpu()
             test_mse = test_mse.cpu()
             logger.add_histogram('TEST/errors',test_mse[test_entropy_ray_zvals>0],global_step)
             logger.add_histogram('TEST/entropy', test_entropy_ray_zvals[test_entropy_ray_zvals>0], global_step)
 
-            for i in range(len(i_test)):
-                disp8 = to8b((test_disps[i]/np.quantile(test_disps[i],0.9))*0.8)
+            for n in range(len(i_test)):
+                disp8 = to8b((test_disps[n]/np.quantile(test_disps[n],0.9))*0.8)
                 # disp[i] = (disp[i] / np.quantile(disp[i], 0.9)) * 0.8
-                disp_filename = os.path.join(testsavedir, 'disp_{:03d}.png'.format(i))
+                disp_filename = os.path.join(testsavedir, 'disp_{:03d}.png'.format(n))
                 imageio.imwrite(disp_filename, disp8)
 
-                acc8 = to8b(test_accs[i])
-                acc_filename = os.path.join(testsavedir, 'acc_{:03d}.png'.format(i))
+                acc8 = to8b(test_accs[n])
+                acc_filename = os.path.join(testsavedir, 'acc_{:03d}.png'.format(n))
                 imageio.imwrite(acc_filename, acc8)
 
-                gt8 = to8b(images[i_test][i].cpu().numpy())
-                gt_filename = os.path.join(testsavedir, 'gt_{:03d}.png'.format(i))
+                gt8 = to8b(images[i_test][n].cpu().numpy())
+                gt_filename = os.path.join(testsavedir, 'gt_{:03d}.png'.format(n))
                 imageio.imwrite(gt_filename, gt8)
 
-                err8 = to8b(test_errors[i])
-                err_filename = os.path.join(testsavedir, 'err_{:03d}.png'.format(i))
+                err8 = to8b(test_errors_color[n])
+                err_filename = os.path.join(testsavedir, 'err_{:03d}.png'.format(n))
                 imageio.imwrite(err_filename, err8)
 
-                entropy8 = to8b(test_entropy_maps[i])
-                entropy_filename = os.path.join(testsavedir, 'entropy_{:03d}.png'.format(i))
+                entropy8 = to8b(test_entropy_maps_color[n])
+                entropy_filename = os.path.join(testsavedir, 'entropy_{:03d}.png'.format(n))
                 imageio.imwrite(entropy_filename, entropy8)
+
+            if args.eval_only:
+                outputsavedir = os.path.join(testsavedir, 'rawoutput')
+                os.makedirs(outputsavedir, exist_ok=True)
+                np.save(os.path.join(outputsavedir,'test_rgbs'),test_rgbs)
+                np.save(os.path.join(outputsavedir,'test_disps'), test_disps)
+                np.save(os.path.join(outputsavedir,'test_errors'),test_errors.cpu().numpy())
+                np.save(os.path.join(outputsavedir,'test_entropys'), test_entropy_maps.numpy())
 
             print('Saved test set')
 
