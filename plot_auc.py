@@ -21,7 +21,7 @@ def main():
     entropy_file = os.path.join(datasvaedir,'test_entropys.npy')
     test_entorpys = np.load(entropy_file,allow_pickle=True)
 
-    logdir = os.path.join(args.baseir, args.savedir)
+    logdir = os.path.join(args.basedir, args.savedir)
     os.makedirs(logdir, exist_ok=True)
 
     ROC_opt = []
@@ -40,8 +40,8 @@ def main():
     ROC_opt = ROC_opt.mean(axis=0)
     ROC_est = ROC_est.mean(axis=0)
 
-    AUC_opt = auc(ROC_opt)
-    AUC_est = auc()
+    figdir = os.path.join(logdir,args.expname)
+    os.makedirs(figdir, exist_ok=True)
 
     x_tickers = np.linspace(0, 100, args.n_key)
     plt.figure()
@@ -53,7 +53,7 @@ def main():
     plt.legend()
     fig = plt.gcf()
     fig.set_size_inches(20, 8)
-    fig.savefig(os.path.join(logdir,args.expname,'ROC_opt_vs_entropy.png'))
+    fig.savefig(os.path.join(figdir,'ROC_opt_vs_entropy.png'))
     plt.close()
 
     table = PrettyTable()
@@ -61,10 +61,12 @@ def main():
     table.field_names = ['item', 'value']
     table.add_row(['Expname',args.expname])
     table.add_row(['Test Samples', n_samples])
-    table.add_row(['Error','mean:{:.4f}\t std:{:.4f}'.format(np.mean(test_errors),np.std(test_errors))])
-    table.add_row(['Entropy', 'mean:{:.4f}\t std:{:.4f}'.format(np.mean(test_entorpys),np.std(test_entorpys))])
-    table.add_row(['AUC_opt', np.round(auc(ROC_opt), 6)])
-    table.add_row(['AUC_est', np.round(auc(ROC_est), 6)])
+    table.add_row(['Error(avg)', '{:.4f}'.format(np.mean(test_errors))])
+    table.add_row(['Error(std)','{:.4f}'.format(np.std(test_errors))])
+    table.add_row(['Entropy(avg)', '{:.4f}'.format(np.mean(test_entorpys))])
+    table.add_row(['Entropy(std)', '{:.4f}'.format(np.std(test_entorpys))])
+    table.add_row(['AUC_opt', '{:.6f}'.format(auc(ROC_opt))])
+    table.add_row(['AUC_est', '{:.6f}'.format(auc(ROC_est))])
     print(table)
 
     txt_file = os.path.join(logdir,'auc.txt')
