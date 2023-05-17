@@ -1,0 +1,8 @@
+imageio==2.27.0
+imageio-ffmpeg
+matplotlib
+configargparse
+tensorboard>=2.0
+tqdm
+opencv-python
+pytorch_msssim

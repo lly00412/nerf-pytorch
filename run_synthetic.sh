@@ -1,4 +1,4 @@
-python run_nerf.py --config configs/room.txt --eval_only
+python run_nerf.py --config configs/room.txt --expname debug
 python run_nerf.py --config configs/horns.txt --eval_only
 python run_nerf.py --config configs/trex.txt --eval_only
 python run_nerf.py --config configs/room.txt --expname llff_room_few --fewshot 5 --eval_only
