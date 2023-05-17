@@ -911,7 +911,7 @@ def train():
                     err = err.cpu().numpy()
 
                 logger.add_image('TRAIN/rgb', to8b(rgb[-1]),global_step,dataformats='HWC')
-                logger.add_image('TRAIN/disp', to8b((disp[-1]/np.np.quantile(disp[-1],0.9))*0.8),global_step,dataformats='HW')
+                logger.add_image('TRAIN/disp', to8b((disp[-1]/np.quantile(disp[-1],0.9))*0.8),global_step,dataformats='HW')
                 logger.add_image('TRAIN/acc', to8b(acc[-1]),global_step,dataformats='HW')
                 logger.add_image('TRAIN/gt_image',to8b(target[-1].cpu().numpy()),global_step,dataformats='HWC')
                 logger.add_image('TRAIN/err', to8b(err[-1]), global_step, dataformats='HWC')
