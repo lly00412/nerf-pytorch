@@ -317,7 +317,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     dists = dists * torch.norm(rays_d[...,None,:], dim=-1)
 
     rgb = torch.sigmoid(raw[...,:3])  # [N_rays, N_samples, 3]
-    uncert = torch.nn.ELU(raw[...,-1])
+    uncert = torch.nn.functional.elu(raw[...,-1])
     noise = 0.
     if raw_noise_std > 0.:
         noise = torch.randn(raw[...,3].shape) * raw_noise_std
@@ -748,7 +748,7 @@ def train():
 
         if 'rgb0' in extras:
             # img_loss0 = img2mse(extras['rgb0'], target_s)
-            img_loss0 = img2nll(extras['rgb0'], target_s,extras['0'])
+            img_loss0 = img2nll(extras['rgb0'], target_s,extras['uncert0'])
             mes_loss0 = img2mse(extras['rgb0'], target_s)
             loss = loss + img_loss0
             #psnr0 = mse2psnr(img_loss0)

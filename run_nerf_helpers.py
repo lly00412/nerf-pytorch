@@ -138,7 +138,7 @@ class NeRF(nn.Module):
             rgb_uncert = self.rgb_uncert_linear(h)
             rgb = rgb_uncert[...,:3]
             uncert = rgb_uncert[...,-1]
-            outputs = torch.cat([rgb, alpha, uncert], -1)
+            outputs = torch.cat([rgb, alpha, uncert[...,None]], -1)
         else:
             outputs = self.output_linear(h) # rgb,alpha,uncert
 
