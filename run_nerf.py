@@ -94,6 +94,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
       rgb_map: [batch_size, 3]. Predicted RGB values for rays.
       disp_map: [batch_size]. Disparity map. Inverse of depth.
       acc_map: [batch_size]. Accumulated opacity (alpha) along a ray.
+      uncert_map: [batch_size]. Uncertainty values for rays
       extras: dict with everything returned by render_rays().
     """
     if c2w is not None:
@@ -132,7 +133,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
         k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
         all_ret[k] = torch.reshape(all_ret[k], k_sh)
 
-    k_extract = ['rgb_map', 'disp_map', 'acc_map']
+    k_extract = ['rgb_map', 'disp_map', 'acc_map','uncert_map']
     ret_list = [all_ret[k] for k in k_extract]
     ret_dict = {k : all_ret[k] for k in all_ret if k not in k_extract}
     return ret_list + [ret_dict]
@@ -151,21 +152,23 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
     rgbs = []
     disps = []
     accs = []
+    uncerts = []
     others = []
 
     t = time.time()
     for i, c2w in enumerate(tqdm(render_poses)):
         print(i, time.time() - t)
         t = time.time()
-        rgb, disp, acc, extra = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
+        rgb, disp, acc, uncert,extra = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
         rgbs.append(rgb.cpu().numpy())
         disps.append(disp.cpu().numpy())
-        accs.append(disp.cpu().numpy())
+        accs.append(acc.cpu().numpy())
+        uncerts.append(uncert.cpu().numpy())
         others.append(extra)
 
 
         if i==0:
-            print(rgb.shape, disp.shape, acc.shape)
+            print(rgb.shape, disp.shape, acc.shape, uncert.shape)
 
         """
         if gt_imgs is not None and render_factor==0:
@@ -182,13 +185,14 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
     rgbs = np.stack(rgbs, 0)
     disps = np.stack(disps, 0)
     accs = np.stack(accs, 0)
+    uncerts = np.stack(uncerts, 0)
     extras = {}
 
     for k in others[-1].keys():
         k_values = [extra[k].cpu().numpy() for extra in others]
         extras[k] = np.stack(k_values,0)
 
-    return rgbs, disps, accs, extras
+    return rgbs, disps, accs, uncerts,extras
 
 
 def create_nerf(args):
@@ -203,18 +207,28 @@ def create_nerf(args):
         embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
+    #model = NeRF(D=args.netdepth, W=args.netwidth,
+                 # input_ch=input_ch, output_ch=output_ch, skips=skips,
+                 # input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
+    # add uncertainty channel
     model = NeRF(D=args.netdepth, W=args.netwidth,
-                 input_ch=input_ch, output_ch=output_ch, skips=skips,
+                 input_ch=input_ch, output_ch=output_ch+1, skips=skips,
                  input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
+
     # model = nn.DataParallel(model)
     model.to(device)
     grad_vars = list(model.parameters())
 
     model_fine = None
     if args.N_importance > 0:
+        # model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
+        #                   input_ch=input_ch, output_ch=output_ch, skips=skips,
+        #                   input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
+        # add uncertainty channel
         model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
-                          input_ch=input_ch, output_ch=output_ch, skips=skips,
-                          input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
+                               input_ch=input_ch, output_ch=output_ch+1, skips=skips,
+                               input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
+
         # model_fine = nn.DataParallel(model_fine)
         model_fine.to(device)
         grad_vars += list(model_fine.parameters())
@@ -284,7 +298,7 @@ def create_nerf(args):
 def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False,out_others=False):
     """Transforms model's predictions to semantically meaningful values.
     Args:
-        raw: [num_rays, num_samples along ray, 4]. Prediction from model.
+        raw: [num_rays, num_samples along ray, 4+1]. Prediction from model.
         z_vals: [num_rays, num_samples along ray]. Integration time.
         rays_d: [num_rays, 3]. Direction of each ray.
     Returns:
@@ -293,6 +307,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
         acc_map: [num_rays]. Sum of weights along each ray.
         weights: [num_rays, num_samples]. Weights assigned to each sampled color.
         depth_map: [num_rays]. Estimated distance to object.
+        uncert_map:[num_rays]. Estimated uncert of a ray.
     """
     raw2alpha = lambda raw, dists, act_fn=F.relu: 1.-torch.exp(-act_fn(raw)*dists)
 
@@ -302,6 +317,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     dists = dists * torch.norm(rays_d[...,None,:], dim=-1)
 
     rgb = torch.sigmoid(raw[...,:3])  # [N_rays, N_samples, 3]
+    uncert = torch.nn.ELU(raw[...,-1])
     noise = 0.
     if raw_noise_std > 0.:
         noise = torch.randn(raw[...,3].shape) * raw_noise_std
@@ -321,6 +337,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     depth_map = torch.sum(weights * z_vals, -1)
     disp_map = 1./torch.max(1e-10 * torch.ones_like(depth_map), depth_map / torch.sum(weights, -1))
     acc_map = torch.sum(weights, -1)
+    uncert_map = torch.sum(weights * uncert, -1)
 
     if white_bkgd:
         rgb_map = rgb_map + (1.-acc_map[...,None])
@@ -330,9 +347,9 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
         others['alpha'] = alpha
         others['sigma'] = sigma
         others['dists'] = dists
-        return rgb_map, disp_map, acc_map, weights, depth_map, others
+        return rgb_map, disp_map, acc_map, weights, depth_map, uncert_map,others
 
-    return rgb_map, disp_map, acc_map, weights, depth_map
+    return rgb_map, disp_map, acc_map, weights, depth_map,uncert_map
 
 
 def render_rays(ray_batch,
@@ -372,10 +389,12 @@ def render_rays(ray_batch,
       rgb_map: [num_rays, 3]. Estimated RGB color of a ray. Comes from fine model.
       disp_map: [num_rays]. Disparity map. 1 / depth.
       acc_map: [num_rays]. Accumulated opacity along each ray. Comes from fine model.
-      raw: [num_rays, num_samples, 4]. Raw predictions from model.
+      uncert_map: [num_rays]. Accumulated opacity along each ray. Comes from fine model.
+      raw: [num_rays, num_samples, 5]. Raw predictions from model.
       rgb0: See rgb_map. Output for coarse model.
       disp0: See disp_map. Output for coarse model.
       acc0: See acc_map. Output for coarse model.
+      uncert0: uncert_map.Output for coarse model.
       z_std: [num_rays]. Standard deviation of distances along ray for each
         sample.
     """
@@ -414,11 +433,11 @@ def render_rays(ray_batch,
 
 #     raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
-    rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
+    rgb_map, disp_map, acc_map, weights, depth_map, uncert_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
     if N_importance > 0:
 
-        rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
+        rgb_map_0, disp_map_0, acc_map_0,uncert_map_0 = rgb_map, disp_map, acc_map,uncert_map
 
         z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
         z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], N_importance, det=(perturb==0.), pytest=pytest)
@@ -431,11 +450,11 @@ def render_rays(ray_batch,
 #         raw = run_network(pts, fn=run_fn)
         raw = network_query_fn(pts, viewdirs, run_fn)
         if out_others:
-            rgb_map, disp_map, acc_map, weights, depth_map,others = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest,out_others=True)
+            rgb_map, disp_map, acc_map, weights, depth_map, uncert_map, others = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest,out_others=True)
         else:
-            rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std,
+            rgb_map, disp_map, acc_map, weights, depth_map, uncert_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std,
                                                                                  white_bkgd, pytest=pytest)
-    ret = {'rgb_map' : rgb_map, 'disp_map' : disp_map, 'acc_map' : acc_map}
+    ret = {'rgb_map' : rgb_map, 'disp_map' : disp_map, 'acc_map' : acc_map,'uncert_map': uncert_map}
 
     if out_others:
         ret['sigma'] = others['sigma']
@@ -449,6 +468,7 @@ def render_rays(ray_batch,
         ret['rgb0'] = rgb_map_0
         ret['disp0'] = disp_map_0
         ret['acc0'] = acc_map_0
+        ret['uncert0'] = uncert_map_0
         ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays]
 
     for k in ret:
@@ -604,7 +624,7 @@ def train():
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', render_poses.shape)
 
-            rgbs, _, _,_ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
+            rgbs, _, _, _,_ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
             print('Done rendering', testsavedir)
             imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
 
@@ -712,20 +732,27 @@ def train():
                 target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
 
         #####  Core optimization loop  #####
-        rgb, disp, acc, extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
+        rgb, disp, acc, uncert, extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
                                                 verbose=i < 10, retraw=True,
                                                 **render_kwargs_train)
 
         optimizer.zero_grad()
-        img_loss = img2mse(rgb, target_s)
+        #img_loss = img2mse(rgb, target_s)
+        # using Kendal Gal uncert log
+        img_loss = img2nll(rgb, target_s,uncert)
+        mes_loss = img2mse(rgb, target_s)
         trans = extras['raw'][...,-1]
         loss = img_loss
-        psnr = mse2psnr(img_loss)
+        #psnr = mse2psnr(img_loss)
+        psnr = mse2psnr(mes_loss)
 
         if 'rgb0' in extras:
-            img_loss0 = img2mse(extras['rgb0'], target_s)
+            # img_loss0 = img2mse(extras['rgb0'], target_s)
+            img_loss0 = img2nll(extras['rgb0'], target_s,extras['0'])
+            mes_loss0 = img2mse(extras['rgb0'], target_s)
             loss = loss + img_loss0
-            psnr0 = mse2psnr(img_loss0)
+            #psnr0 = mse2psnr(img_loss0)
+            psnr0 = mse2psnr(mes_loss0)
 
         loss.backward()
         optimizer.step()

@@ -8,6 +8,7 @@ from pytorch_msssim import ssim, ms_ssim
 
 # Misc
 img2mse = lambda x, y : torch.mean((x - y) ** 2)
+img2nll = lambda x,y,z : torch.mean(torch.mean((x - y )**2,axis=-1)/torch.exp(z) + z)
 mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
 to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
 
@@ -110,7 +111,8 @@ class NeRF(nn.Module):
         if use_viewdirs:
             self.feature_linear = nn.Linear(W, W)
             self.alpha_linear = nn.Linear(W, 1)
-            self.rgb_linear = nn.Linear(W//2, 3)
+            # self.rgb_linear = nn.Linear(W//2, 3)
+            self.rgb_uncert_linear = nn.Linear(W // 2, 4) # r,g,b,uncert
         else:
             self.output_linear = nn.Linear(W, output_ch)
 
@@ -132,10 +134,16 @@ class NeRF(nn.Module):
                 h = self.views_linears[i](h)
                 h = F.relu(h)
 
-            rgb = self.rgb_linear(h)
-            outputs = torch.cat([rgb, alpha], -1)
+            #rgb = self.rgb_linear(h)
+            rgb_uncert = self.rgb_uncert_linear(h)
+            rgb_index = torch.LongTensor([0,1,2])
+            uncert_index = torch.LongTensor([3])
+            rgb = torch.index_select(rgb_uncert,dim=-1,index=rgb_index)
+            uncert = torch.index_select(rgb_uncert,dim=-1,index=uncert_index)
+
+            outputs = torch.cat([rgb, alpha, uncert], -1)
         else:
-            outputs = self.output_linear(h)
+            outputs = self.output_linear(h) # rgb,alpha,uncert
 
         return outputs    
 
