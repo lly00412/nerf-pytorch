@@ -136,11 +136,8 @@ class NeRF(nn.Module):
 
             #rgb = self.rgb_linear(h)
             rgb_uncert = self.rgb_uncert_linear(h)
-            rgb_index = torch.LongTensor([0,1,2])
-            uncert_index = torch.LongTensor([3])
-            rgb = torch.index_select(rgb_uncert,dim=-1,index=rgb_index)
-            uncert = torch.index_select(rgb_uncert,dim=-1,index=uncert_index)
-
+            rgb = rgb_uncert[...,:3]
+            uncert = rgb_uncert[...,-1]
             outputs = torch.cat([rgb, alpha, uncert], -1)
         else:
             outputs = self.output_linear(h) # rgb,alpha,uncert
