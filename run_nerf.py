@@ -788,13 +788,15 @@ def train():
                 rgbs = []
                 disps = []
                 accs = []
+                uncerts = []
                 others = []
                 entropy_maps = []
                 for i_batch in range(0,N_poses,20):
-                    batch_rgbs, batch_disps, batch_accs, batch_extras = render_path(render_poses[i_batch:i_batch+20], hwf, K, args.chunk, render_kwargs_test)
+                    batch_rgbs, batch_disps, batch_accs, batch_uncerts, batch_extras = render_path(render_poses[i_batch:i_batch+20], hwf, K, args.chunk, render_kwargs_test)
                     rgbs.append(batch_rgbs)
                     disps.append(batch_disps)
                     accs.append(batch_accs)
+                    uncerts.append(batch_uncerts)
                     others.append(batch_extras)
 
                     batch_alpha_all = torch.Tensor(batch_extras['alpha']).view(-1, batch_extras['alpha'].shape[-1])
@@ -806,6 +808,7 @@ def train():
                 rgbs = np.concatenate(rgbs, 0)
                 disps = np.concatenate(disps, 0)
                 accs = np.concatenate(accs, 0)
+                uncerts = np.concatenate(uncerts, 0)
                 entropy_maps = np.concatenate(entropy_maps,0)
                 extras = {}
 
@@ -815,6 +818,7 @@ def train():
 
                 for i in range(disps.shape[0]):
                     disps[i] = (disps[i] / np.quantile(disps[i], 0.9)) * 0.8
+
                 # rgbs, disps, accs,extras = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
             # alpha_all = torch.Tensor(extras['alpha']).view(-1, extras['alpha'].shape[-1])  # 【N_rays. N_samples]
             # accs_all = torch.Tensor(accs).view(-1)
@@ -826,6 +830,7 @@ def train():
             imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'acc.mp4', to8b(accs), fps=30, quality=8)
+            imageio.mimwrite(moviebase + 'uncert.mp4', to8b(uncerts), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'entropy.mp4', to8b(entropy_maps / np.nanmax(entropy_maps)), fps=30, quality=8)
             # imageio.mimwrite(moviebase + 'errors.mp4', to8b(errors.cpu().numpy()), fps=30, quality=8)
 
@@ -841,10 +846,12 @@ def train():
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', poses[i_test].shape)
             with torch.no_grad():
-                test_rgbs, test_disps, test_accs, test_extras = render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir)
+                test_rgbs, test_disps, test_accs, test_uncerts, test_extras = render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir)
 
-            test_loss = img2mse(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]))
-            test_psnr = mse2psnr(test_loss)
+            #test_loss = img2mse(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]))
+            test_loss = img2nll(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]),test_uncerts)
+            test_mes_loss = img2mse(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]))
+            test_psnr = mse2psnr(test_mes_loss)
             test_ssim, test_msssim = img2ssim(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]))
             test_alpha_all = torch.Tensor(test_extras['alpha']).view(-1,test_extras['alpha'].shape[-1]) # 【N_rays. N_samples]
             test_accs_all = torch.Tensor(test_accs).view(-1)
@@ -871,6 +878,7 @@ def train():
             logger.add_image('TEST/rgb', to8b(test_rgbs[handout_id]), global_step, dataformats='HWC')
             logger.add_image('TEST/disp', to8b((test_disps[handout_id] / np.quantile(test_disps[-1],0.9))*0.8), global_step, dataformats='HW')
             logger.add_image('TEST/acc', to8b(test_accs[handout_id]), global_step, dataformats='HW')
+            logger.add_image('TEST/uncert', to8b(test_uncerts[handout_id]), global_step, dataformats='HW')
             logger.add_image('TEST/gt_image', to8b(images[i_test][handout_id].cpu().numpy()), global_step, dataformats='HWC')
             logger.add_image('TEST/err', to8b(test_errors_color[handout_id]), global_step, dataformats='HWC')
 
@@ -889,6 +897,10 @@ def train():
                 acc_filename = os.path.join(testsavedir, 'acc_{:03d}.png'.format(n))
                 imageio.imwrite(acc_filename, acc8)
 
+                uncert8 = to8b(test_uncerts[n])
+                uncert_filename = os.path.join(testsavedir, 'uncert_{:03d}.png'.format(n))
+                imageio.imwrite(uncert_filename, uncert8)
+
                 gt8 = to8b(images[i_test][n].cpu().numpy())
                 gt_filename = os.path.join(testsavedir, 'gt_{:03d}.png'.format(n))
                 imageio.imwrite(gt_filename, gt8)
@@ -905,6 +917,7 @@ def train():
                 outputsavedir = os.path.join(testsavedir, 'rawoutput')
                 os.makedirs(outputsavedir, exist_ok=True)
                 np.save(os.path.join(outputsavedir,'test_rgbs'),test_rgbs)
+                np.save(os.path.join(outputsavedir, 'test_uncerts'), test_uncerts)
                 np.save(os.path.join(outputsavedir,'test_disps'), test_disps)
                 np.save(os.path.join(outputsavedir,'test_errors'),test_errors.cpu().numpy())
                 np.save(os.path.join(outputsavedir,'test_entropys'), test_entropy_maps.numpy())
@@ -925,7 +938,7 @@ def train():
                 target = images[img_i][None,...]
                 pose = torch.Tensor(poses[img_i])[None,...]
                 with torch.no_grad():
-                    rgb, disp, acc,_ = render_path(pose.to(device), hwf, K, args.chunk, render_kwargs_train,gt_imgs=target)
+                    rgb, disp, acc,uncert,_ = render_path(pose.to(device), hwf, K, args.chunk, render_kwargs_train,gt_imgs=target)
 
 
                 psnr = mse2psnr(img2mse(torch.Tensor(rgb), torch.Tensor(target)))
@@ -940,6 +953,7 @@ def train():
                 logger.add_image('TRAIN/rgb', to8b(rgb[-1]),global_step,dataformats='HWC')
                 logger.add_image('TRAIN/disp', to8b((disp[-1]/np.quantile(disp[-1],0.9))*0.8),global_step,dataformats='HW')
                 logger.add_image('TRAIN/acc', to8b(acc[-1]),global_step,dataformats='HW')
+                logger.add_image('TRAIN/uncert', to8b(uncert[-1]), global_step, dataformats='HW')
                 logger.add_image('TRAIN/gt_image',to8b(target[-1].cpu().numpy()),global_step,dataformats='HWC')
                 logger.add_image('TRAIN/err', to8b(err[-1]), global_step, dataformats='HWC')
 
