@@ -816,8 +816,11 @@ def train():
                     k_values = [extra[k] for extra in others]
                     extras[k] = np.concatenate(k_values, 0)
 
-                for i in range(disps.shape[0]):
-                    disps[i] = (disps[i] / np.quantile(disps[i], 0.9)) * 0.8
+                uncerts = np.exp(uncerts)
+                for j in range(disps.shape[0]):
+                    disps[j] = (disps[j] / np.quantile(disps[j], 0.9)) * 0.8
+                    accs[j] = (accs[j] / np.quantile(accs[j], 0.9)) * 0.8
+                    uncerts[j] = (uncerts[j] / np.quantile(uncerts[j], 0.9)) * 0.8
 
                 # rgbs, disps, accs,extras = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
             # alpha_all = torch.Tensor(extras['alpha']).view(-1, extras['alpha'].shape[-1])  # 【N_rays. N_samples]
@@ -830,7 +833,7 @@ def train():
             imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'acc.mp4', to8b(accs), fps=30, quality=8)
-            imageio.mimwrite(moviebase + 'uncert.mp4', to8b(uncerts), fps=30, quality=8)
+            imageio.mimwrite(moviebase + 'uncert.mp4', to8b(np.exp(uncerts)), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'entropy.mp4', to8b(entropy_maps / np.nanmax(entropy_maps)), fps=30, quality=8)
             # imageio.mimwrite(moviebase + 'errors.mp4', to8b(errors.cpu().numpy()), fps=30, quality=8)
 
@@ -849,7 +852,7 @@ def train():
                 test_rgbs, test_disps, test_accs, test_uncerts, test_extras = render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir)
 
             #test_loss = img2mse(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]))
-            test_loss = img2nll(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]),test_uncerts)
+            test_loss = img2nll(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]),torch.Tensor(test_uncerts))
             test_mes_loss = img2mse(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]))
             test_psnr = mse2psnr(test_mes_loss)
             test_ssim, test_msssim = img2ssim(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]))
@@ -868,6 +871,7 @@ def train():
             logger.add_scalar('TEST/ms_ssim', test_msssim, global_step)
             logger.add_scalar('TEST/coefficient_entropy_errors',coefficient, global_step)
 
+
             handout_id = np.random.choice(test_rgbs.shape[0])
             test_entropy_maps = test_entropy_ray_zvals.view(test_disps.shape).cpu()
             with torch.no_grad():
@@ -875,10 +879,20 @@ def train():
                 test_errors_color = test_errors_color.cpu().numpy()
                 test_entropy_maps_color = color_error_image_func()(test_entropy_maps).cpu().numpy()
 
+            if args.eval_only:
+                outputsavedir = os.path.join(testsavedir, 'rawoutput')
+                os.makedirs(outputsavedir, exist_ok=True)
+                np.save(os.path.join(outputsavedir,'test_rgbs'),test_rgbs)
+                np.save(os.path.join(outputsavedir, 'test_uncerts'), test_uncerts)
+                np.save(os.path.join(outputsavedir,'test_disps'), test_disps)
+                np.save(os.path.join(outputsavedir,'test_errors'),test_errors.cpu().numpy())
+                np.save(os.path.join(outputsavedir,'test_entropys'), test_entropy_maps.numpy())
+
+            test_uncerts = np.exp(test_uncerts)
             logger.add_image('TEST/rgb', to8b(test_rgbs[handout_id]), global_step, dataformats='HWC')
             logger.add_image('TEST/disp', to8b((test_disps[handout_id] / np.quantile(test_disps[-1],0.9))*0.8), global_step, dataformats='HW')
-            logger.add_image('TEST/acc', to8b(test_accs[handout_id]), global_step, dataformats='HW')
-            logger.add_image('TEST/uncert', to8b(test_uncerts[handout_id]), global_step, dataformats='HW')
+            logger.add_image('TEST/acc', to8b((test_accs[handout_id]/np.quantile(test_accs[-1],0.9))*0.8), global_step, dataformats='HW')
+            logger.add_image('TEST/uncert', to8b((test_uncerts[handout_id]/np.quantile(test_uncerts[-1],0.9))*0.8), global_step, dataformats='HW')
             logger.add_image('TEST/gt_image', to8b(images[i_test][handout_id].cpu().numpy()), global_step, dataformats='HWC')
             logger.add_image('TEST/err', to8b(test_errors_color[handout_id]), global_step, dataformats='HWC')
 
@@ -893,11 +907,11 @@ def train():
                 disp_filename = os.path.join(testsavedir, 'disp_{:03d}.png'.format(n))
                 imageio.imwrite(disp_filename, disp8)
 
-                acc8 = to8b(test_accs[n])
+                acc8 = to8b((test_accs[n]/np.quantile(test_accs[n],0.9))*0.8)
                 acc_filename = os.path.join(testsavedir, 'acc_{:03d}.png'.format(n))
                 imageio.imwrite(acc_filename, acc8)
 
-                uncert8 = to8b(test_uncerts[n])
+                uncert8 = to8b((test_uncerts[n]/np.quantile(test_uncerts[n],0.9))*0.8)
                 uncert_filename = os.path.join(testsavedir, 'uncert_{:03d}.png'.format(n))
                 imageio.imwrite(uncert_filename, uncert8)
 
@@ -912,15 +926,6 @@ def train():
                 entropy8 = to8b(test_entropy_maps_color[n])
                 entropy_filename = os.path.join(testsavedir, 'entropy_{:03d}.png'.format(n))
                 imageio.imwrite(entropy_filename, entropy8)
-
-            if args.eval_only:
-                outputsavedir = os.path.join(testsavedir, 'rawoutput')
-                os.makedirs(outputsavedir, exist_ok=True)
-                np.save(os.path.join(outputsavedir,'test_rgbs'),test_rgbs)
-                np.save(os.path.join(outputsavedir, 'test_uncerts'), test_uncerts)
-                np.save(os.path.join(outputsavedir,'test_disps'), test_disps)
-                np.save(os.path.join(outputsavedir,'test_errors'),test_errors.cpu().numpy())
-                np.save(os.path.join(outputsavedir,'test_entropys'), test_entropy_maps.numpy())
 
             print('Saved test set')
 
