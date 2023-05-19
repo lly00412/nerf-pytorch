@@ -818,9 +818,10 @@ def train():
 
                 uncerts = np.exp(uncerts)
                 for j in range(disps.shape[0]):
-                    disps[j] = (disps[j] / np.quantile(disps[j], 0.9)) * 0.8
-                    accs[j] = (accs[j] / np.quantile(accs[j], 0.9)) * 0.8
-                    uncerts[j] = (uncerts[j] / np.quantile(uncerts[j], 0.9)) * 0.8
+                    disps[j] = disps[j] / np.quantile(disps[j], 0.9)
+                    accs[j] = accs[j] / np.quantile(accs[j], 0.9)
+                    uncerts[j] = uncerts[j] / np.quantile(uncerts[j], 0.9)
+                    entropy_maps[j] = entropy_maps[j] / np.quantile(entropy_maps[j], 0.9)
 
                 # rgbs, disps, accs,extras = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
             # alpha_all = torch.Tensor(extras['alpha']).view(-1, extras['alpha'].shape[-1])  # 【N_rays. N_samples]
@@ -833,8 +834,8 @@ def train():
             imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'acc.mp4', to8b(accs), fps=30, quality=8)
-            imageio.mimwrite(moviebase + 'uncert.mp4', to8b(np.exp(uncerts)), fps=30, quality=8)
-            imageio.mimwrite(moviebase + 'entropy.mp4', to8b(entropy_maps / np.nanmax(entropy_maps)), fps=30, quality=8)
+            imageio.mimwrite(moviebase + 'uncert.mp4', to8b(uncerts), fps=30, quality=8)
+            imageio.mimwrite(moviebase + 'entropy.mp4', to8b(entropy_maps), fps=30, quality=8)
             # imageio.mimwrite(moviebase + 'errors.mp4', to8b(errors.cpu().numpy()), fps=30, quality=8)
 
             # if args.use_viewdirs:
@@ -890,9 +891,9 @@ def train():
 
             test_uncerts = np.exp(test_uncerts)
             logger.add_image('TEST/rgb', to8b(test_rgbs[handout_id]), global_step, dataformats='HWC')
-            logger.add_image('TEST/disp', to8b((test_disps[handout_id] / np.quantile(test_disps[-1],0.9))*0.8), global_step, dataformats='HW')
-            logger.add_image('TEST/acc', to8b((test_accs[handout_id]/np.quantile(test_accs[-1],0.9))*0.8), global_step, dataformats='HW')
-            logger.add_image('TEST/uncert', to8b((test_uncerts[handout_id]/np.quantile(test_uncerts[-1],0.9))*0.8), global_step, dataformats='HW')
+            logger.add_image('TEST/disp', to8b(test_disps[handout_id] / np.quantile(test_disps[-1],0.9)), global_step, dataformats='HW')
+            logger.add_image('TEST/acc', to8b(test_accs[handout_id]/np.quantile(test_accs[-1],0.9)), global_step, dataformats='HW')
+            logger.add_image('TEST/uncert', to8b(test_uncerts[handout_id]/np.quantile(test_uncerts[-1],0.9)), global_step, dataformats='HW')
             logger.add_image('TEST/gt_image', to8b(images[i_test][handout_id].cpu().numpy()), global_step, dataformats='HWC')
             logger.add_image('TEST/err', to8b(test_errors_color[handout_id]), global_step, dataformats='HWC')
 
@@ -907,11 +908,11 @@ def train():
                 disp_filename = os.path.join(testsavedir, 'disp_{:03d}.png'.format(n))
                 imageio.imwrite(disp_filename, disp8)
 
-                acc8 = to8b((test_accs[n]/np.quantile(test_accs[n],0.9))*0.8)
+                acc8 = to8b(test_accs[n]/np.quantile(test_accs[n],0.9))
                 acc_filename = os.path.join(testsavedir, 'acc_{:03d}.png'.format(n))
                 imageio.imwrite(acc_filename, acc8)
 
-                uncert8 = to8b((test_uncerts[n]/np.quantile(test_uncerts[n],0.9))*0.8)
+                uncert8 = to8b(test_uncerts[n]/np.quantile(test_uncerts[n],0.9))
                 uncert_filename = os.path.join(testsavedir, 'uncert_{:03d}.png'.format(n))
                 imageio.imwrite(uncert_filename, uncert8)
 
@@ -955,10 +956,11 @@ def train():
                     err = color_error_image_func()(err.cpu(),torch.Tensor(target).mean(axis=-1))
                     err = err.cpu().numpy()
 
+                uncert = np.exp(uncert)
                 logger.add_image('TRAIN/rgb', to8b(rgb[-1]),global_step,dataformats='HWC')
-                logger.add_image('TRAIN/disp', to8b((disp[-1]/np.quantile(disp[-1],0.9))*0.8),global_step,dataformats='HW')
-                logger.add_image('TRAIN/acc', to8b(acc[-1]),global_step,dataformats='HW')
-                logger.add_image('TRAIN/uncert', to8b(uncert[-1]), global_step, dataformats='HW')
+                logger.add_image('TRAIN/disp', to8b(disp[-1]/np.quantile(disp[-1],0.9)),global_step,dataformats='HW')
+                logger.add_image('TRAIN/acc', to8b(acc[-1]/np.quantile(acc[-1],0.9)),global_step,dataformats='HW')
+                logger.add_image('TRAIN/uncert', to8b(uncert[-1]/np.quantile(uncert[-1],0.9)), global_step, dataformats='HW')
                 logger.add_image('TRAIN/gt_image',to8b(target[-1].cpu().numpy()),global_step,dataformats='HWC')
                 logger.add_image('TRAIN/err', to8b(err[-1]), global_step, dataformats='HWC')
 
