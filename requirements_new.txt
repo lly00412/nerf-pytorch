@@ -7,3 +7,5 @@ tqdm
 opencv-python
 pytorch_msssim
 functorch
+torch==2.0.1
+torchvision==0.15.2
