@@ -160,7 +160,7 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
         rgb, disp, acc, extra = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
         rgbs.append(rgb.cpu().numpy())
         disps.append(disp.cpu().numpy())
-        accs.append(disp.cpu().numpy())
+        accs.append(acc.cpu().numpy())
         others.append(extra)
 
 
@@ -786,8 +786,8 @@ def train():
                     k_values = [extra[k] for extra in others]
                     extras[k] = np.concatenate(k_values, 0)
 
-                for i in range(disps.shape[0]):
-                    disps[i] = (disps[i] / np.quantile(disps[i], 0.9)) * 0.8
+                for j in range(disps.shape[0]):
+                    disps[j] = (disps[j] / np.quantile(disps[j], 0.9)) * 0.8
                 # rgbs, disps, accs,extras = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
             # alpha_all = torch.Tensor(extras['alpha']).view(-1, extras['alpha'].shape[-1])  # 【N_rays. N_samples]
             # accs_all = torch.Tensor(accs).view(-1)
