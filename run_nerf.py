@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 
 from run_nerf_helpers import *
 from opt import *
+from mcdropout_helpers import *
 
 from load_llff import load_llff_data
 from load_deepvoxels import load_dv_data
@@ -757,34 +758,10 @@ def train():
         if i%args.i_video==0 and i > 0:
             # Turn on testing mode
             with torch.no_grad():
-                N_poses = len(render_poses)
-                rgbs = []
-                disps = []
-                accs = []
-                others = []
-                entropy_maps = []
-                for i_batch in range(0,N_poses,20):
-                    batch_rgbs, batch_disps, batch_accs, batch_extras = render_path(render_poses[i_batch:i_batch+20], hwf, K, args.chunk, render_kwargs_test)
-                    rgbs.append(batch_rgbs)
-                    disps.append(batch_disps)
-                    accs.append(batch_accs)
-                    others.append(batch_extras)
-
-                    batch_alpha_all = torch.Tensor(batch_extras['alpha']).view(-1, batch_extras['alpha'].shape[-1])
-                    batch_accs_all = torch.Tensor(batch_accs).view(-1)
-                    batch_entropy_ray_zvals = entropy_loss.ray_zvals_per_ray(batch_alpha_all, batch_accs_all)
-                    batch_entropy_maps = batch_entropy_ray_zvals.view(batch_disps.shape).cpu().numpy()
-                    entropy_maps.append(batch_entropy_maps)
-
-                rgbs = np.concatenate(rgbs, 0)
-                disps = np.concatenate(disps, 0)
-                accs = np.concatenate(accs, 0)
-                entropy_maps = np.concatenate(entropy_maps,0)
-                extras = {}
-
-                for k in others[-1].keys():
-                    k_values = [extra[k] for extra in others]
-                    extras[k] = np.concatenate(k_values, 0)
+                # activate mcdropout
+                enable_dropout(render_kwargs_test['network_fn'])
+                rgbs, accs, disps, entropy_maps, uncert_maps = batch_render(K, args, entropy_loss, hwf,
+                                                                        render_kwargs_test, render_poses)
 
                 for j in range(disps.shape[0]):
                     disps[j] = (disps[j] / np.quantile(disps[j], 0.9)) * 0.8
@@ -963,6 +940,40 @@ def train():
         """
 
         global_step += 1
+
+
+def batch_render(K, args, entropy_loss, hwf, render_kwargs, render_poses, mc_dropout=False):
+    N_poses = len(render_poses)
+    rgbs = []
+    disps = []
+    accs = []
+    others = []
+    entropy_maps = []
+    for i_batch in range(0, N_poses, 20):
+        batch_rgbs, batch_disps, batch_accs, batch_extras = render_path(render_poses[i_batch:i_batch + 20], hwf, K,
+                                                                        args.chunk, render_kwargs)
+        rgbs.append(batch_rgbs)
+        disps.append(batch_disps)
+        accs.append(batch_accs)
+        others.append(batch_extras)
+
+        batch_alpha_all = torch.Tensor(batch_extras['alpha']).view(-1, batch_extras['alpha'].shape[-1])
+        batch_accs_all = torch.Tensor(batch_accs).view(-1)
+        batch_entropy_ray_zvals = entropy_loss.ray_zvals_per_ray(batch_alpha_all, batch_accs_all)
+        batch_entropy_maps = batch_entropy_ray_zvals.view(batch_disps.shape).cpu().numpy()
+        entropy_maps.append(batch_entropy_maps)
+    rgbs = np.concatenate(rgbs, 0)
+    disps = np.concatenate(disps, 0)
+    accs = np.concatenate(accs, 0)
+    entropy_maps = np.concatenate(entropy_maps, 0)
+    extras = {}
+    for k in others[-1].keys():
+        k_values = [extra[k] for extra in others]
+        extras[k] = np.concatenate(k_values, 0)
+    if not mc_dropout:
+        return rgbs, accs, disps, entropy_maps, others
+    else:
+        enable_dropout(render_kwargs['network_fn'])
 
 
 if __name__=='__main__':
