@@ -942,16 +942,19 @@ def train():
         global_step += 1
 
 
-def batch_render(K, args, entropy_loss, hwf, render_kwargs, render_poses, mc_dropout=False):
+def batch_render(K, args, entropy_loss, hwf, render_kwargs, render_poses, mc_dropout=False, gt_imgs=None, savedir=None, n_passes=10,batch_size=20):
     N_poses = len(render_poses)
     rgbs = []
     disps = []
     accs = []
     others = []
     entropy_maps = []
-    for i_batch in range(0, N_poses, 20):
+    n_batches = int(np.ceil(N_poses / batch_size))
+    for i_batch in range(n_batches):
+        if gt_imgs is not None:
+            gt_imgs = gt_imgs[i_batch*batch_size : i_batch*batch_size+batch_size]
         batch_rgbs, batch_disps, batch_accs, batch_extras = render_path(render_poses[i_batch:i_batch + 20], hwf, K,
-                                                                        args.chunk, render_kwargs)
+                                                                        args.chunk, render_kwargs,gt_imgs=gt_imgs,savedir=savedir)
         rgbs.append(batch_rgbs)
         disps.append(batch_disps)
         accs.append(batch_accs)
@@ -970,10 +973,22 @@ def batch_render(K, args, entropy_loss, hwf, render_kwargs, render_poses, mc_dro
     for k in others[-1].keys():
         k_values = [extra[k] for extra in others]
         extras[k] = np.concatenate(k_values, 0)
-    if not mc_dropout:
-        return rgbs, accs, disps, entropy_maps, others
-    else:
+    if mc_dropout:
         enable_dropout(render_kwargs['network_fn'])
+        H, W, focal = hwf
+        uncerts = []
+        for j in range(N_poses):
+            c2w = render_poses[j]
+            rgbs = []
+            for n in range(n_passes):
+                rgb, _, _, _ = render(H, W, K, chunk=args.chunk, c2w=c2w[:3, :4], **render_kwargs)
+                rgbs.append(rgb.cpu().numpy())
+            rgbs = np.array(rgbs)
+            uncert = np.mean(np.std(rgbs,axis=0),axis=-1)
+            uncerts.append(uncert)
+        others['uncerts'] = np.array(uncerts)
+    return rgbs, accs, disps, entropy_maps, others
+
 
 
 if __name__=='__main__':
