@@ -759,10 +759,8 @@ def train():
             # Turn on testing mode
             with torch.no_grad():
                 # activate mcdropout
-                enable_dropout(render_kwargs_test['network_fn'])
-                rgbs, accs, disps, entropy_maps, uncert_maps = batch_render(K, args, entropy_loss, hwf,
+                rgbs, accs, disps, entropy_maps, others = batch_render(K, args, entropy_loss, hwf,
                                                                         render_kwargs_test, render_poses)
-
                 for j in range(disps.shape[0]):
                     disps[j] = (disps[j] / np.quantile(disps[j], 0.9)) * 0.8
                 # rgbs, disps, accs,extras = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
@@ -942,7 +940,7 @@ def train():
         global_step += 1
 
 
-def batch_render(K, args, entropy_loss, hwf, render_kwargs, render_poses, mc_dropout=False, gt_imgs=None, savedir=None, n_passes=10,batch_size=20):
+def batch_render(K, args, entropy_loss, hwf, render_kwargs, render_poses, gt_imgs=None, savedir=None,batch_size=20):
     N_poses = len(render_poses)
     rgbs = []
     disps = []
@@ -973,14 +971,14 @@ def batch_render(K, args, entropy_loss, hwf, render_kwargs, render_poses, mc_dro
     for k in others[-1].keys():
         k_values = [extra[k] for extra in others]
         extras[k] = np.concatenate(k_values, 0)
-    if mc_dropout:
+    if args.mc_dropout:
         enable_dropout(render_kwargs['network_fn'])
         H, W, focal = hwf
         uncerts = []
         for j in range(N_poses):
             c2w = render_poses[j]
             rgbs = []
-            for n in range(n_passes):
+            for n in range(args.n_passes):
                 rgb, _, _, _ = render(H, W, K, chunk=args.chunk, c2w=c2w[:3, :4], **render_kwargs)
                 rgbs.append(rgb.cpu().numpy())
             rgbs = np.array(rgbs)

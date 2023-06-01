@@ -145,5 +145,10 @@ def config_parser():
     parser.add_argument("--smoothing", action='store_true',
                         help='using information gain reduction loss')
 
+    # mcdropout
+    parser.add_argument("--mc_dropout", action='store_true',
+                        help='if do mc_dropout')
+    parser.add_argument("--n_passes", type=int, default=10,
+                        help='number of passes for mc_dropout')
 
     return parser
