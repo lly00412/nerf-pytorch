@@ -478,7 +478,7 @@ def batch_render(K, args,hwf, render_kwargs, render_poses, gt_imgs=None, savedir
                 dropout_rgb, _, _, _ = render(H, W, K, chunk=args.chunk, c2w=c2w[:3, :4], **render_kwargs)
                 dropout_rgbs.append(dropout_rgb)
             dropout_rgbs = torch.stack(dropout_rgbs,0)
-            uncert = torch.mean(torch.std(dropout_rgbs,dim=0),dim=-1)
+            uncert = torch.mean(torch.var(dropout_rgbs,dim=0),dim=-1)
             uncerts.append(uncert.cpu().numpy())
         extras['uncerts'] = np.array(uncerts)
         close_dropout(render_kwargs['network_fn'])
@@ -822,7 +822,9 @@ def train():
             imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'acc.mp4', to8b(accs), fps=30, quality=8)
             if args.mc_dropout:
-                imageio.mimwrite(moviebase + 'uncert.mp4', to8b(extras['uncerts']), fps=30, quality=8)
+                uncerts_color = color_error_image_func()(torch.Tensor(extras['uncerts']))
+                uncerts_color = uncerts_color.cpu().numpy()
+                imageio.mimwrite(moviebase + 'uncert_color.mp4', to8b(uncerts_color), fps=30, quality=8)
             # imageio.mimwrite(moviebase + 'entropy.mp4', to8b(entropy_maps / np.nanmax(entropy_maps)), fps=30, quality=8)
             # imageio.mimwrite(moviebase + 'errors.mp4', to8b(errors.cpu().numpy()), fps=30, quality=8)
 
@@ -862,7 +864,6 @@ def train():
 
             handout_id = np.random.choice(test_rgbs.shape[0])
             # test_entropy_maps = test_entropy_ray_zvals.view(test_disps.shape).cpu()
-            test_uncerts = test_extras['uncerts']
 
             with torch.no_grad():
                 test_errors_color = color_error_image_func()(test_errors.cpu(),torch.Tensor(images[i_test]).mean(axis=-1))
@@ -874,13 +875,17 @@ def train():
             logger.add_image('TEST/acc', to8b(test_accs[handout_id]), global_step, dataformats='HW')
             logger.add_image('TEST/gt_image', to8b(images[i_test][handout_id].cpu().numpy()), global_step, dataformats='HWC')
             logger.add_image('TEST/err', to8b(test_errors_color[handout_id]), global_step, dataformats='HWC')
-            logger.add_image('TEST/uncert', to8b(test_uncerts[handout_id]), global_step, dataformats='HW')
 
             # test_entropy_ray_zvals = test_entropy_ray_zvals.cpu()
             test_mse = test_mse.cpu()
-            test_sigma = test_uncerts.flatten()
             logger.add_histogram('TEST/errors',test_mse,global_step)
-            logger.add_histogram('TEST/uncerts',test_sigma, global_step)
+            if args.mc_dropout:
+                test_uncerts = test_extras['uncerts']
+                test_uncerts_color = color_error_image_func()(torch.Tensor(test_uncerts))
+                test_uncerts_color = test_uncerts_color.cpu().numpy()
+                test_sigma2 = test_uncerts.flatten()
+                logger.add_image('TEST/uncert', to8b(test_uncerts_color[handout_id]), global_step, dataformats='HWC')
+                logger.add_histogram('TEST/uncerts',test_sigma2, global_step)
 
 
             for n in range(len(i_test)):
@@ -905,7 +910,7 @@ def train():
                 # entropy_filename = os.path.join(testsavedir, 'entropy_{:03d}.png'.format(n))
                 # imageio.imwrite(entropy_filename, entropy8)
                 if args.mc_dropout:
-                    uncet8 = to8b(test_uncerts[n])
+                    uncet8 = to8b(test_uncerts_color[n])
                     uncert_filename = os.path.join(testsavedir, 'uncert_{:03d}.png'.format(n))
                     imageio.imwrite(uncert_filename, uncet8)
 
