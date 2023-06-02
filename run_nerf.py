@@ -459,8 +459,58 @@ def render_rays(ray_batch,
     return ret
 
 
+def batch_render(K, args,hwf, render_kwargs, render_poses, gt_imgs=None, savedir=None,batch_size=20):
+    N_poses = len(render_poses)
+    rgbs = []
+    disps = []
+    accs = []
+    others = []
+    entropy_maps = []
+    n_batches = int(np.ceil(N_poses / batch_size))
+    for i_batch in range(n_batches):
+        if gt_imgs is not None:
+            gt_imgs = gt_imgs[i_batch*batch_size : i_batch*batch_size+batch_size]
+        batch_rgbs, batch_disps, batch_accs, batch_extras = render_path(render_poses[i_batch:i_batch + 20], hwf, K,
+                                                                        args.chunk, render_kwargs,gt_imgs=gt_imgs,savedir=savedir)
+        rgbs.append(batch_rgbs)
+        disps.append(batch_disps)
+        accs.append(batch_accs)
+        others.append(batch_extras)
+
+        batch_alpha_all = torch.Tensor(batch_extras['alpha']).view(-1, batch_extras['alpha'].shape[-1])
+        batch_accs_all = torch.Tensor(batch_accs).view(-1)
+        # batch_entropy_ray_zvals = entropy_loss.ray_zvals_per_ray(batch_alpha_all, batch_accs_all)
+        # batch_entropy_maps = batch_entropy_ray_zvals.view(batch_disps.shape).cpu().numpy()
+        # entropy_maps.append(batch_entropy_maps)
+    rgbs = np.concatenate(rgbs, 0)
+    disps = np.concatenate(disps, 0)
+    accs = np.concatenate(accs, 0)
+    # entropy_maps = np.concatenate(entropy_maps, 0)
+    extras = {}
+    for k in others[-1].keys():
+        k_values = [extra[k] for extra in others]
+        extras[k] = np.concatenate(k_values, 0)
+    # extras['entropys'] = entropy_maps
+    if args.mc_dropout:
+        enable_dropout(render_kwargs['network_fn'])
+        H, W, focal = hwf
+        uncerts = []
+        for j in range(N_poses):
+            c2w = render_poses[j]
+            rgbs = []
+            for n in range(args.n_passes):
+                rgb, _, _, _ = render(H, W, K, chunk=args.chunk, c2w=c2w[:3, :4], **render_kwargs)
+                rgbs.append(rgb.cpu().numpy())
+            rgbs = np.array(rgbs)
+            uncert = np.mean(np.std(rgbs,axis=0),axis=-1)
+            uncerts.append(uncert)
+        extras['uncerts'] = np.array(uncerts)
+    return rgbs, accs, disps, extras
+
+
 def train():
 
+    global entropy_loss
     parser = config_parser()
     args = parser.parse_args()
     logger = SummaryWriter(os.path.join(args.basedir, args.expname,'summaries'))
@@ -758,23 +808,16 @@ def train():
         if i%args.i_video==0 and i > 0:
             # Turn on testing mode
             with torch.no_grad():
-                # activate mcdropout
-                rgbs, accs, disps, entropy_maps, others = batch_render(K, args, entropy_loss, hwf,
-                                                                        render_kwargs_test, render_poses)
-                for j in range(disps.shape[0]):
-                    disps[j] = (disps[j] / np.quantile(disps[j], 0.9)) * 0.8
-                # rgbs, disps, accs,extras = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
-            # alpha_all = torch.Tensor(extras['alpha']).view(-1, extras['alpha'].shape[-1])  # 【N_rays. N_samples]
-            # accs_all = torch.Tensor(accs).view(-1)
-            # entropy_ray_zvals = entropy_loss.ray_zvals_per_ray(alpha_all, accs_all)
-            # entropy_maps = entropy_ray_zvals.view(disps.shape).cpu().numpy()
-
+                rgbs, accs, disps, extras = batch_render(K, args, entropy_loss, hwf,render_kwargs_test, render_poses)
+            for j in range(disps.shape[0]):
+                disps[j] = (disps[j] / np.quantile(disps[j], 0.9)) * 0.8
+            # entropy_maps = extras['entropys']
             print('Done, saving', rgbs.shape, disps.shape)
             moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
             imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'acc.mp4', to8b(accs), fps=30, quality=8)
-            imageio.mimwrite(moviebase + 'entropy.mp4', to8b(entropy_maps / np.nanmax(entropy_maps)), fps=30, quality=8)
+            # imageio.mimwrite(moviebase + 'entropy.mp4', to8b(entropy_maps / np.nanmax(entropy_maps)), fps=30, quality=8)
             # imageio.mimwrite(moviebase + 'errors.mp4', to8b(errors.cpu().numpy()), fps=30, quality=8)
 
             # if args.use_viewdirs:
@@ -789,43 +832,50 @@ def train():
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', poses[i_test].shape)
             with torch.no_grad():
-                test_rgbs, test_disps, test_accs, test_extras = render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir)
+                #test_rgbs, test_disps, test_accs, test_extras = render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir)
+                test_poses = torch.Tensor(poses[i_test]).to(device)
+                test_rgbs, test_disps, test_accs, test_extras = batch_render(K, args, entropy_loss, hwf,render_kwargs_test, test_poses, gt_imgs=images[i_test], savedir=testsavedir)
 
             test_loss = img2mse(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]))
             test_psnr = mse2psnr(test_loss)
             test_ssim, test_msssim = img2ssim(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]))
-            test_alpha_all = torch.Tensor(test_extras['alpha']).view(-1,test_extras['alpha'].shape[-1]) # 【N_rays. N_samples]
+            # test_alpha_all = torch.Tensor(test_extras['alpha']).view(-1,test_extras['alpha'].shape[-1]) # 【N_rays. N_samples]
             test_accs_all = torch.Tensor(test_accs).view(-1)
-            test_entropy_ray_zvals = entropy_loss.ray_zvals_per_ray(test_alpha_all,test_accs_all)
+            # test_entropy_ray_zvals = entropy_loss.ray_zvals_per_ray(test_alpha_all,test_accs_all)
             test_errors = (torch.Tensor(test_rgbs) - torch.Tensor(images[i_test]))**2
             test_errors = test_errors.mean(axis=-1)
             test_mse = test_errors.view(-1)
 
-            coefficient = correlation_coefficient(test_entropy_ray_zvals,test_mse)
+            # coefficient = correlation_coefficient(test_entropy_ray_zvals,test_mse)
 
             logger.add_scalar('TEST/loss', test_loss, global_step)
             logger.add_scalar('TEST/psnr', test_psnr, global_step)
             logger.add_scalar('TEST/ssim', test_ssim, global_step)
             logger.add_scalar('TEST/ms_ssim', test_msssim, global_step)
-            logger.add_scalar('TEST/coefficient_entropy_errors',coefficient, global_step)
+            # logger.add_scalar('TEST/coefficient_entropy_errors',coefficient, global_step)
 
             handout_id = np.random.choice(test_rgbs.shape[0])
-            test_entropy_maps = test_entropy_ray_zvals.view(test_disps.shape).cpu()
+            # test_entropy_maps = test_entropy_ray_zvals.view(test_disps.shape).cpu()
+            test_uncerts = test_extras['uncerts']
+
             with torch.no_grad():
                 test_errors_color = color_error_image_func()(test_errors.cpu(),torch.Tensor(images[i_test]).mean(axis=-1))
                 test_errors_color = test_errors_color.cpu().numpy()
-                test_entropy_maps_color = color_error_image_func()(test_entropy_maps).cpu().numpy()
+                # test_entropy_maps_color = color_error_image_func()(test_entropy_maps).cpu().numpy()
 
             logger.add_image('TEST/rgb', to8b(test_rgbs[handout_id]), global_step, dataformats='HWC')
             logger.add_image('TEST/disp', to8b((test_disps[handout_id] / np.quantile(test_disps[-1],0.9))*0.8), global_step, dataformats='HW')
             logger.add_image('TEST/acc', to8b(test_accs[handout_id]), global_step, dataformats='HW')
             logger.add_image('TEST/gt_image', to8b(images[i_test][handout_id].cpu().numpy()), global_step, dataformats='HWC')
             logger.add_image('TEST/err', to8b(test_errors_color[handout_id]), global_step, dataformats='HWC')
+            logger.add_image('TEST/uncert', to8b(test_uncerts[handout_id]), global_step, dataformats='HWC')
 
-            test_entropy_ray_zvals = test_entropy_ray_zvals.cpu()
+            # test_entropy_ray_zvals = test_entropy_ray_zvals.cpu()
             test_mse = test_mse.cpu()
-            logger.add_histogram('TEST/errors',test_mse[test_entropy_ray_zvals>0],global_step)
-            logger.add_histogram('TEST/entropy', test_entropy_ray_zvals[test_entropy_ray_zvals>0], global_step)
+            test_sigma = test_uncerts.flatten()
+            logger.add_histogram('TEST/errors',test_mse,global_step)
+            logger.add_histogram('TEST/uncerts',test_sigma, global_step)
+
 
             for n in range(len(i_test)):
                 disp8 = to8b((test_disps[n]/np.quantile(test_disps[n],0.9))*0.8)
@@ -845,9 +895,13 @@ def train():
                 err_filename = os.path.join(testsavedir, 'err_{:03d}.png'.format(n))
                 imageio.imwrite(err_filename, err8)
 
-                entropy8 = to8b(test_entropy_maps_color[n])
-                entropy_filename = os.path.join(testsavedir, 'entropy_{:03d}.png'.format(n))
-                imageio.imwrite(entropy_filename, entropy8)
+                # entropy8 = to8b(test_entropy_maps_color[n])
+                # entropy_filename = os.path.join(testsavedir, 'entropy_{:03d}.png'.format(n))
+                # imageio.imwrite(entropy_filename, entropy8)
+                if args.mc_dropout:
+                    uncet8 = to8b(test_uncerts[n])
+                    uncert_filename = os.path.join(testsavedir, 'uncert_{:03d}.png'.format(n))
+                    imageio.imwrite(uncert_filename, uncet8)
 
             if args.eval_only:
                 outputsavedir = os.path.join(testsavedir, 'rawoutput')
@@ -855,7 +909,8 @@ def train():
                 np.save(os.path.join(outputsavedir,'test_rgbs'),test_rgbs)
                 np.save(os.path.join(outputsavedir,'test_disps'), test_disps)
                 np.save(os.path.join(outputsavedir,'test_errors'),test_errors.cpu().numpy())
-                np.save(os.path.join(outputsavedir,'test_entropys'), test_entropy_maps.numpy())
+                if args.mc_dropout:
+                    np.save(os.path.join(outputsavedir,'test_uncerts'),test_uncerts)
 
             print('Saved test set')
 
@@ -940,52 +995,7 @@ def train():
         global_step += 1
 
 
-def batch_render(K, args, entropy_loss, hwf, render_kwargs, render_poses, gt_imgs=None, savedir=None,batch_size=20):
-    N_poses = len(render_poses)
-    rgbs = []
-    disps = []
-    accs = []
-    others = []
-    entropy_maps = []
-    n_batches = int(np.ceil(N_poses / batch_size))
-    for i_batch in range(n_batches):
-        if gt_imgs is not None:
-            gt_imgs = gt_imgs[i_batch*batch_size : i_batch*batch_size+batch_size]
-        batch_rgbs, batch_disps, batch_accs, batch_extras = render_path(render_poses[i_batch:i_batch + 20], hwf, K,
-                                                                        args.chunk, render_kwargs,gt_imgs=gt_imgs,savedir=savedir)
-        rgbs.append(batch_rgbs)
-        disps.append(batch_disps)
-        accs.append(batch_accs)
-        others.append(batch_extras)
 
-        batch_alpha_all = torch.Tensor(batch_extras['alpha']).view(-1, batch_extras['alpha'].shape[-1])
-        batch_accs_all = torch.Tensor(batch_accs).view(-1)
-        batch_entropy_ray_zvals = entropy_loss.ray_zvals_per_ray(batch_alpha_all, batch_accs_all)
-        batch_entropy_maps = batch_entropy_ray_zvals.view(batch_disps.shape).cpu().numpy()
-        entropy_maps.append(batch_entropy_maps)
-    rgbs = np.concatenate(rgbs, 0)
-    disps = np.concatenate(disps, 0)
-    accs = np.concatenate(accs, 0)
-    entropy_maps = np.concatenate(entropy_maps, 0)
-    extras = {}
-    for k in others[-1].keys():
-        k_values = [extra[k] for extra in others]
-        extras[k] = np.concatenate(k_values, 0)
-    if args.mc_dropout:
-        enable_dropout(render_kwargs['network_fn'])
-        H, W, focal = hwf
-        uncerts = []
-        for j in range(N_poses):
-            c2w = render_poses[j]
-            rgbs = []
-            for n in range(args.n_passes):
-                rgb, _, _, _ = render(H, W, K, chunk=args.chunk, c2w=c2w[:3, :4], **render_kwargs)
-                rgbs.append(rgb.cpu().numpy())
-            rgbs = np.array(rgbs)
-            uncert = np.mean(np.std(rgbs,axis=0),axis=-1)
-            uncerts.append(uncert)
-        others['uncerts'] = np.array(uncerts)
-    return rgbs, accs, disps, entropy_maps, others
 
 
 
