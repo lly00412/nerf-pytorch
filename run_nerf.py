@@ -821,6 +821,8 @@ def train():
             imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps), fps=30, quality=8)
             imageio.mimwrite(moviebase + 'acc.mp4', to8b(accs), fps=30, quality=8)
+            if args.mc_dropout:
+                imageio.mimwrite(moviebase + 'uncert.mp4', to8b(extras['uncerts']), fps=30, quality=8)
             # imageio.mimwrite(moviebase + 'entropy.mp4', to8b(entropy_maps / np.nanmax(entropy_maps)), fps=30, quality=8)
             # imageio.mimwrite(moviebase + 'errors.mp4', to8b(errors.cpu().numpy()), fps=30, quality=8)
 
@@ -872,7 +874,7 @@ def train():
             logger.add_image('TEST/acc', to8b(test_accs[handout_id]), global_step, dataformats='HW')
             logger.add_image('TEST/gt_image', to8b(images[i_test][handout_id].cpu().numpy()), global_step, dataformats='HWC')
             logger.add_image('TEST/err', to8b(test_errors_color[handout_id]), global_step, dataformats='HWC')
-            logger.add_image('TEST/uncert', to8b(test_uncerts[handout_id]), global_step, dataformats='HWC')
+            logger.add_image('TEST/uncert', to8b(test_uncerts[handout_id]), global_step, dataformats='HW')
 
             # test_entropy_ray_zvals = test_entropy_ray_zvals.cpu()
             test_mse = test_mse.cpu()
