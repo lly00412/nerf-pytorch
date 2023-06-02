@@ -465,12 +465,31 @@ def batch_render(K, args,hwf, render_kwargs, render_poses, gt_imgs=None, savedir
     disps = []
     accs = []
     others = []
-    entropy_maps = []
+    extras = {}
+    # entropy_maps = []
+
+    if args.mc_dropout:
+        enable_dropout(render_kwargs['network_fn'])
+        H, W, focal = hwf
+        uncerts = []
+        for j, c2w in enumerate(tqdm(render_poses)):
+            dropout_rgbs = []
+            for n in range(args.n_passes):
+                dropout_rgb, _, _, _ = render(H, W, K, chunk=args.chunk, c2w=c2w[:3, :4], **render_kwargs)
+                dropout_rgbs.append(dropout_rgb.cpu().numpy())
+            dropout_rgbs = np.array(dropout_rgbs)
+            uncert = np.mean(np.std(dropout_rgbs,axis=0),axis=-1)
+            uncerts.append(uncert)
+        extras['uncerts'] = np.array(uncerts)
+
     n_batches = int(np.ceil(N_poses / batch_size))
     for i_batch in range(n_batches):
+        start = int(i_batch*batch_size)
+        end = int(i_batch*batch_size+batch_size)
+        batch_poses = render_poses[start:end]
         if gt_imgs is not None:
-            gt_imgs = gt_imgs[i_batch*batch_size : i_batch*batch_size+batch_size]
-        batch_rgbs, batch_disps, batch_accs, batch_extras = render_path(render_poses[i_batch:i_batch + 20], hwf, K,
+            gt_imgs = gt_imgs[start:end]
+        batch_rgbs, batch_disps, batch_accs, batch_extras = render_path(batch_poses, hwf, K,
                                                                         args.chunk, render_kwargs,gt_imgs=gt_imgs,savedir=savedir)
         rgbs.append(batch_rgbs)
         disps.append(batch_disps)
@@ -486,25 +505,9 @@ def batch_render(K, args,hwf, render_kwargs, render_poses, gt_imgs=None, savedir
     disps = np.concatenate(disps, 0)
     accs = np.concatenate(accs, 0)
     # entropy_maps = np.concatenate(entropy_maps, 0)
-    extras = {}
     for k in others[-1].keys():
         k_values = [extra[k] for extra in others]
         extras[k] = np.concatenate(k_values, 0)
-    # extras['entropys'] = entropy_maps
-    if args.mc_dropout:
-        enable_dropout(render_kwargs['network_fn'])
-        H, W, focal = hwf
-        uncerts = []
-        for j in range(N_poses):
-            c2w = render_poses[j]
-            rgbs = []
-            for n in range(args.n_passes):
-                rgb, _, _, _ = render(H, W, K, chunk=args.chunk, c2w=c2w[:3, :4], **render_kwargs)
-                rgbs.append(rgb.cpu().numpy())
-            rgbs = np.array(rgbs)
-            uncert = np.mean(np.std(rgbs,axis=0),axis=-1)
-            uncerts.append(uncert)
-        extras['uncerts'] = np.array(uncerts)
     return rgbs, accs, disps, extras
 
 
@@ -808,7 +811,7 @@ def train():
         if i%args.i_video==0 and i > 0:
             # Turn on testing mode
             with torch.no_grad():
-                rgbs, accs, disps, extras = batch_render(K, args, entropy_loss, hwf,render_kwargs_test, render_poses)
+                rgbs, accs, disps, extras = batch_render(K, args, hwf,render_kwargs_test, render_poses)
             for j in range(disps.shape[0]):
                 disps[j] = (disps[j] / np.quantile(disps[j], 0.9)) * 0.8
             # entropy_maps = extras['entropys']
@@ -834,7 +837,7 @@ def train():
             with torch.no_grad():
                 #test_rgbs, test_disps, test_accs, test_extras = render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir)
                 test_poses = torch.Tensor(poses[i_test]).to(device)
-                test_rgbs, test_disps, test_accs, test_extras = batch_render(K, args, entropy_loss, hwf,render_kwargs_test, test_poses, gt_imgs=images[i_test], savedir=testsavedir)
+                test_rgbs, test_disps, test_accs, test_extras = batch_render(K, args, hwf,render_kwargs_test, test_poses, gt_imgs=images[i_test], savedir=testsavedir)
 
             test_loss = img2mse(torch.Tensor(test_rgbs), torch.Tensor(images[i_test]))
             test_psnr = mse2psnr(test_loss)
