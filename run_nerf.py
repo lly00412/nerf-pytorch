@@ -476,11 +476,12 @@ def batch_render(K, args,hwf, render_kwargs, render_poses, gt_imgs=None, savedir
             dropout_rgbs = []
             for n in range(args.n_passes):
                 dropout_rgb, _, _, _ = render(H, W, K, chunk=args.chunk, c2w=c2w[:3, :4], **render_kwargs)
-                dropout_rgbs.append(dropout_rgb.cpu().numpy())
-            dropout_rgbs = np.array(dropout_rgbs)
-            uncert = np.mean(np.std(dropout_rgbs,axis=0),axis=-1)
-            uncerts.append(uncert)
+                dropout_rgbs.append(dropout_rgb)
+            dropout_rgbs = torch.stack(dropout_rgbs,0)
+            uncert = torch.mean(torch.std(dropout_rgbs,dim=0),dim=-1)
+            uncerts.append(uncert.cpu().numpy())
         extras['uncerts'] = np.array(uncerts)
+        close_dropout(render_kwargs['network_fn'])
 
     n_batches = int(np.ceil(N_poses / batch_size))
     for i_batch in range(n_batches):
