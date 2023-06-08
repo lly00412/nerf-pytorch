@@ -478,7 +478,7 @@ def batch_render(K, args,hwf, render_kwargs, render_poses, gt_imgs=None, savedir
                 dropout_rgb, _, _, _ = render(H, W, K, chunk=args.chunk, c2w=c2w[:3, :4], **render_kwargs)
                 dropout_rgbs.append(dropout_rgb)
             dropout_rgbs = torch.stack(dropout_rgbs,0)
-            uncert = torch.mean(torch.var(dropout_rgbs,dim=0),dim=-1)
+            uncert = torch.mean(torch.std(dropout_rgbs,dim=0),dim=-1)
             uncerts.append(uncert.cpu().numpy())
         extras['uncerts'] = np.array(uncerts)
         close_dropout(render_kwargs['network_fn'])
