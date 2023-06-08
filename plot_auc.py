@@ -10,16 +10,18 @@ def main():
     parser = argparse.ArgumentParser(description='Evaluation Process')
     parser.add_argument("--expname", type=str,help='experiment name')
     parser.add_argument("--basedir", type=str, default='./logs/',help='where to store ckpts and logs')
-    parser.add_argument("--iter", type=str, default=200001, help='compute the evaluation from which iteration')
+    parser.add_argument("--iter", type=str, default=200000, help='compute the evaluation from which iteration')
     parser.add_argument('--n_key', type=int, default=21, help='number of points for roc curve')
+    parser.add_argument('--gt', type=str, default='errors', help='ground truth baseline for optimal roc')
+    parser.add_argument('--est', type=str, default='uncerts', help='sorted scores for estimated roc')
     parser.add_argument('--savedir', type=str, default='auc', help='where to save the logs')
     args = parser.parse_args()
 
     datasvaedir = os.path.join(args.basedir, args.expname, 'testset_{:06d}'.format(args.iter),'rawoutput')
-    errfile = os.path.join(datasvaedir,'test_errors.npy')
-    test_errors = np.load(errfile,allow_pickle=True)
-    entropy_file = os.path.join(datasvaedir,'test_entropys.npy')
-    test_entorpys = np.load(entropy_file,allow_pickle=True)
+    gt_file = os.path.join(datasvaedir,'test_{}.npy'.format(args.gt))
+    test_gt = np.load(gt_file,allow_pickle=True)
+    est_file = os.path.join(datasvaedir,'test_{}.npy'.format(args.est))
+    test_est = np.load(est_file,allow_pickle=True)
 
     logdir = os.path.join(args.basedir, args.savedir)
     os.makedirs(logdir, exist_ok=True)
@@ -27,11 +29,11 @@ def main():
     ROC_opt = []
     ROC_est = []
 
-    n_samples = test_errors.shape[0]
+    n_samples = test_gt.shape[0]
     for i in range(n_samples):
-        errs = test_errors[i].flatten()
-        entropys = test_entorpys[i].flatten()
-        sample_roc = roc(entropys,errs,n_value=21)
+        gts = test_gt[i].flatten()
+        ests = test_est[i].flatten()
+        sample_roc = roc(ests,gts,n_value=21)
         ROC_opt.append(sample_roc['roc_opt'])
         ROC_est.append(sample_roc['roc_est'])
 
@@ -47,13 +49,14 @@ def main():
     plt.figure()
     plt.plot(x_tickers, ROC_opt, marker="^", color='blue', label='opt')
     plt.plot(x_tickers, ROC_est, marker="o", color='red', label='entropy')
-    plt.xticks(x_tickers)
-    plt.xlabel('Sample Size(%)')
-    plt.ylabel('Accumulative Errors')
-    plt.legend()
+    plt.xticks(x_tickers,fontsize=20)
+    plt.yticks(fontsize=20)
+    plt.xlabel('Sample Size(%)',fontsize=25)
+    plt.ylabel('Accumulative Errors',fontsize=25)
+    plt.legend(fontsize=25)
     fig = plt.gcf()
     fig.set_size_inches(20, 8)
-    fig.savefig(os.path.join(figdir,'ROC_opt_vs_entropy.png'))
+    fig.savefig(os.path.join(figdir,'ROC_opt_{}_vs_est_{}.png'.format(args.gt,args.est)))
     plt.close()
 
     table = PrettyTable()
@@ -61,10 +64,10 @@ def main():
     table.field_names = ['item', 'value']
     table.add_row(['Expname',args.expname])
     table.add_row(['Test Samples', n_samples])
-    table.add_row(['Error(avg)', '{:.4f}'.format(np.mean(test_errors))])
-    table.add_row(['Error(std)','{:.4f}'.format(np.std(test_errors))])
-    table.add_row(['Entropy(avg)', '{:.4f}'.format(np.mean(test_entorpys))])
-    table.add_row(['Entropy(std)', '{:.4f}'.format(np.std(test_entorpys))])
+    table.add_row(['{}(avg)'.format(args.gt), '{:.4f}'.format(np.mean(test_gt))])
+    table.add_row(['{}(std)'.format(args.gt),'{:.4f}'.format(np.std(test_gt))])
+    table.add_row(['{}(avg)'.format(args.est), '{:.4f}'.format(np.mean(test_est))])
+    table.add_row(['{}(std)'.format(args.est), '{:.4f}'.format(np.std(test_est))])
     table.add_row(['AUC_opt', '{:.6f}'.format(auc(ROC_opt))])
     table.add_row(['AUC_est', '{:.6f}'.format(auc(ROC_est))])
     print(table)

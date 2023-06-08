@@ -120,6 +120,8 @@ def config_parser():
                         help='frequency of testset saving')
     parser.add_argument("--i_video",   type=int, default=50000,
                         help='frequency of render_poses video saving')
+    parser.add_argument("--save_video", action='store_true',
+                        help='if save the render video')
 
     # entropy loss
     parser.add_argument("--entropy", action='store_true',

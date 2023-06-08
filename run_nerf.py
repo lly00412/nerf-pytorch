@@ -810,21 +810,22 @@ def train():
             print('Saved checkpoints at', path)
 
         if i%args.i_video==0 and i > 0:
-            # Turn on testing mode
-            with torch.no_grad():
-                rgbs, accs, disps, extras = batch_render(K, args, hwf,render_kwargs_test, render_poses)
-            for j in range(disps.shape[0]):
-                disps[j] = (disps[j] / np.quantile(disps[j], 0.9)) * 0.8
-            # entropy_maps = extras['entropys']
-            print('Done, saving', rgbs.shape, disps.shape)
-            moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
-            imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
-            imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps), fps=30, quality=8)
-            imageio.mimwrite(moviebase + 'acc.mp4', to8b(accs), fps=30, quality=8)
-            if args.mc_dropout:
-                uncerts_color = color_error_image_func()(torch.Tensor(extras['uncerts']))
-                uncerts_color = uncerts_color.cpu().numpy()
-                imageio.mimwrite(moviebase + 'uncert_color.mp4', to8b(uncerts_color), fps=30, quality=8)
+            if args.save_video:
+                # Turn on testing mode
+                with torch.no_grad():
+                    rgbs, accs, disps, extras = batch_render(K, args, hwf,render_kwargs_test, render_poses)
+                for j in range(disps.shape[0]):
+                    disps[j] = (disps[j] / np.quantile(disps[j], 0.9)) * 0.8
+                # entropy_maps = extras['entropys']
+                print('Done, saving', rgbs.shape, disps.shape)
+                moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
+                imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
+                imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps), fps=30, quality=8)
+                imageio.mimwrite(moviebase + 'acc.mp4', to8b(accs), fps=30, quality=8)
+                if args.mc_dropout:
+                    uncerts_color = color_error_image_func()(torch.Tensor(extras['uncerts']))
+                    uncerts_color = uncerts_color.cpu().numpy()
+                    imageio.mimwrite(moviebase + 'uncert_color.mp4', to8b(uncerts_color), fps=30, quality=8)
             # imageio.mimwrite(moviebase + 'entropy.mp4', to8b(entropy_maps / np.nanmax(entropy_maps)), fps=30, quality=8)
             # imageio.mimwrite(moviebase + 'errors.mp4', to8b(errors.cpu().numpy()), fps=30, quality=8)
 
