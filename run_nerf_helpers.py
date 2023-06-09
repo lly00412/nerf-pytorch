@@ -140,11 +140,10 @@ class NeRF(nn.Module):
                 h = F.relu(h)
 
             rgb = self.rgb_linear(h)
-            outputs = torch.cat([rgb, alpha], -1)
+            outputs = torch.cat([rgb, alpha, h], -1)
         else:
             outputs = self.output_linear(h)
-
-        return outputs    
+        return outputs
 
     def load_weights_from_keras(self, weights):
         assert self.use_viewdirs, "Not implemented if use_viewdirs=False"

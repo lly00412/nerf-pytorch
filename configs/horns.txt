@@ -18,5 +18,6 @@ N_entropy = 0
 entropy_ray_zvals_lambda = 0.001
 
 device_id = [0]
-mc_dropout = True
+mc_dropout = False
 n_passes = 10
+save_video = False

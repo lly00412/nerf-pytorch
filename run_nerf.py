@@ -323,6 +323,12 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     disp_map = 1./torch.max(1e-10 * torch.ones_like(depth_map), depth_map / torch.sum(weights, -1))
     acc_map = torch.sum(weights, -1)
 
+    jacobs = torch.zeros(alpha.shape)
+    if raw.size(-1)>4:
+        h = raw[...,3:]
+        jacob_pt = (h**2).mean(-1)
+        jacobs = torch.sum(weights*jacob_pt,-1).cpu()
+
     if white_bkgd:
         rgb_map = rgb_map + (1.-acc_map[...,None])
 
@@ -331,6 +337,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
         others['alpha'] = alpha
         others['sigma'] = sigma
         others['dists'] = dists
+        others['jacobs'] = jacobs
         return rgb_map, disp_map, acc_map, weights, depth_map, others
 
     return rgb_map, disp_map, acc_map, weights, depth_map
@@ -443,6 +450,7 @@ def render_rays(ray_batch,
         ret['alpha'] = others['alpha']
         ret['z_vals'] = z_vals
         ret['dists'] = others['dists']
+        ret['jacobs'] = others['jacobs']
 
     if retraw:
         ret['raw'] = raw
@@ -854,6 +862,7 @@ def train():
             test_errors = (torch.Tensor(test_rgbs) - torch.Tensor(images[i_test]))**2
             test_errors = test_errors.mean(axis=-1)
             test_mse = test_errors.view(-1)
+            test_jacobs = test_extras['jacobs']
 
             # coefficient = correlation_coefficient(test_entropy_ray_zvals,test_mse)
 
@@ -869,6 +878,7 @@ def train():
             with torch.no_grad():
                 test_errors_color = color_error_image_func()(test_errors.cpu(),torch.Tensor(images[i_test]).mean(axis=-1))
                 test_errors_color = test_errors_color.cpu().numpy()
+                test_jacobs_color = color_error_image_func()(torch.Tensor(test_extras['jacobs'])).cpu().numpy()
                 # test_entropy_maps_color = color_error_image_func()(test_entropy_maps).cpu().numpy()
 
             logger.add_image('TEST/rgb', to8b(test_rgbs[handout_id]), global_step, dataformats='HWC')
@@ -907,6 +917,10 @@ def train():
                 err_filename = os.path.join(testsavedir, 'err_{:03d}.png'.format(n))
                 imageio.imwrite(err_filename, err8)
 
+                jacob8 = to8b(test_jacobs_color[n])
+                jacob_filename = os.path.join(testsavedir, 'jacob_{:03d}.png'.format(n))
+                imageio.imwrite(jacob_filename, jacob8)
+
                 # entropy8 = to8b(test_entropy_maps_color[n])
                 # entropy_filename = os.path.join(testsavedir, 'entropy_{:03d}.png'.format(n))
                 # imageio.imwrite(entropy_filename, entropy8)
@@ -921,6 +935,7 @@ def train():
                 np.save(os.path.join(outputsavedir,'test_rgbs'),test_rgbs)
                 np.save(os.path.join(outputsavedir,'test_disps'), test_disps)
                 np.save(os.path.join(outputsavedir,'test_errors'),test_errors.cpu().numpy())
+                np.save(os.path.join(outputsavedir, 'test_jacobs'), test_jacobs)
                 if args.mc_dropout:
                     np.save(os.path.join(outputsavedir,'test_uncerts'),test_uncerts)
 
