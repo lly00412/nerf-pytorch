@@ -125,7 +125,7 @@ class NeRF(nn.Module):
                 h = torch.cat([input_pts, h], -1)
 
         # mc_dropoout layer1
-        h = self.dropout(h)
+        #h = self.dropout(h)
 
         if self.use_viewdirs:
             alpha = self.alpha_linear(h)
@@ -133,11 +133,13 @@ class NeRF(nn.Module):
             h = torch.cat([feature, input_views], -1)
 
             # mc_dropout layer2
-            h = self.dropout(h)
+            #h = self.dropout(h)
         
             for i, l in enumerate(self.views_linears):
                 h = self.views_linears[i](h)
                 h = F.relu(h)
+
+            h = self.dropout(h)
 
             rgb = self.rgb_linear(h)
             rgb_act = torch.sigmoid(rgb)[...,None]
