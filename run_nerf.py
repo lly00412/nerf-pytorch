@@ -325,7 +325,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
 
     jacobs = torch.zeros(alpha.shape)
     if raw.size(-1)>4:
-        h = raw[...,3:]
+        h = raw[...,4:]
         jacob_pt = (h**2).mean(-1)
         jacobs = torch.sum(weights*jacob_pt,-1).cpu()
 
@@ -807,15 +807,16 @@ def train():
         #####           end            #####
 
         # Rest is logging
-        if i%args.i_weights==0:
-            path = os.path.join(basedir, expname, '{:06d}.tar'.format(i))
-            torch.save({
-                'global_step': global_step,
-                'network_fn_state_dict': render_kwargs_train['network_fn'].state_dict(),
-                'network_fine_state_dict': render_kwargs_train['network_fine'].state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-            }, path)
-            print('Saved checkpoints at', path)
+        if not args.eval_only:
+            if i%args.i_weights==0:
+                path = os.path.join(basedir, expname, '{:06d}.tar'.format(i))
+                torch.save({
+                    'global_step': global_step,
+                    'network_fn_state_dict': render_kwargs_train['network_fn'].state_dict(),
+                    'network_fine_state_dict': render_kwargs_train['network_fine'].state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                }, path)
+                print('Saved checkpoints at', path)
 
         if i%args.i_video==0 and i > 0:
             if args.save_video:
@@ -888,15 +889,15 @@ def train():
             logger.add_image('TEST/err', to8b(test_errors_color[handout_id]), global_step, dataformats='HWC')
 
             # test_entropy_ray_zvals = test_entropy_ray_zvals.cpu()
-            test_mse = test_mse.cpu()
-            logger.add_histogram('TEST/errors',test_mse,global_step)
+            # test_mse = test_mse.cpu()
+            # logger.add_histogram('TEST/errors',test_mse,global_step)
             if args.mc_dropout:
                 test_uncerts = test_extras['uncerts']
                 test_uncerts_color = color_error_image_func()(torch.Tensor(test_uncerts))
                 test_uncerts_color = test_uncerts_color.cpu().numpy()
                 test_sigma2 = test_uncerts.flatten()
                 logger.add_image('TEST/uncert', to8b(test_uncerts_color[handout_id]), global_step, dataformats='HWC')
-                logger.add_histogram('TEST/uncerts',test_sigma2, global_step)
+                # logger.add_histogram('TEST/uncerts',test_sigma2, global_step)
 
 
             for n in range(len(i_test)):
@@ -929,7 +930,7 @@ def train():
                     uncert_filename = os.path.join(testsavedir, 'uncert_{:03d}.png'.format(n))
                     imageio.imwrite(uncert_filename, uncet8)
 
-            if args.eval_only:
+            if args.eval_only or i==args.N_iters:
                 outputsavedir = os.path.join(testsavedir, 'rawoutput')
                 os.makedirs(outputsavedir, exist_ok=True)
                 np.save(os.path.join(outputsavedir,'test_rgbs'),test_rgbs)
