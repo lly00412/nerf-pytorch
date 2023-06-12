@@ -143,10 +143,11 @@ class NeRF(nn.Module):
             rgb_act = torch.sigmoid(rgb)[...,None]
             J = rgb_act*(1-rgb_act)*h[...,None,:]
             J_squre = torch.bmm(J,J.transpose(1,2))
-            pos = torch.zeros(3, 3).fill_diagonal_(1e-5)
-            J_squre += pos.unsqueeze(0).repeat(J_squre.size(0), 1, 1)
-            J_det = torch.det(J_squre)
-            outputs = torch.cat([rgb, alpha, J_det], -1)
+            #pos = torch.zeros(3, 3).fill_diagonal_(1e-5)
+            #J_squre += pos.unsqueeze(0).repeat(J_squre.size(0), 1, 1)
+            #J_det = torch.trace(J_squre)
+            J_trace = J_squre.diagonal(offset=0, dim1=-1, dim2=-2).sum(-1)
+            outputs = torch.cat([rgb, alpha, J_trace[...,None]], -1)
             #outputs = torch.cat([rgb, alpha, h], -1)
         else:
             outputs = self.output_linear(h)

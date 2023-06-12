@@ -18,4 +18,3 @@ N_entropy = 0
 entropy_ray_zvals_lambda = 0.001
 
 device_id = [0]
-save_video = True

@@ -325,9 +325,11 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
 
     jacobs = torch.zeros(alpha.shape)
     if raw.size(-1)>4:
-        h = raw[...,4:]
-        jacob_pt = (h**2).mean(-1)
-        jacobs = torch.sum(weights*jacob_pt,-1).cpu()
+        # h = raw[...,4:]
+        # jacob_pt = (h**2).mean(-1)
+        # jacobs = torch.sum(weights*jacob_pt,-1).cpu()
+        jacob_pt = raw[...,4]
+        jacobs = torch.sum(weights * jacob_pt, -1).cpu()
 
     if white_bkgd:
         rgb_map = rgb_map + (1.-acc_map[...,None])
@@ -479,16 +481,16 @@ def batch_render(K, args,hwf, render_kwargs, render_poses, gt_imgs=None, savedir
     if args.mc_dropout:
         enable_dropout(render_kwargs['network_fn'])
         H, W, focal = hwf
-        uncerts = []
+        mcs = []
         for j, c2w in enumerate(tqdm(render_poses)):
             dropout_rgbs = []
             for n in range(args.n_passes):
                 dropout_rgb, _, _, _ = render(H, W, K, chunk=args.chunk, c2w=c2w[:3, :4], **render_kwargs)
                 dropout_rgbs.append(dropout_rgb)
             dropout_rgbs = torch.stack(dropout_rgbs,0)
-            uncert = torch.mean(torch.std(dropout_rgbs,dim=0),dim=-1)
-            uncerts.append(uncert.cpu().numpy())
-        extras['uncerts'] = np.array(uncerts)
+            mc = torch.mean(torch.std(dropout_rgbs,dim=0),dim=-1)
+            mcs.append(mc.cpu().numpy())
+        extras['mcs'] = np.array(mcs)
         close_dropout(render_kwargs['network_fn'])
 
     n_batches = int(np.ceil(N_poses / batch_size))
@@ -832,9 +834,9 @@ def train():
                 imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps), fps=30, quality=8)
                 imageio.mimwrite(moviebase + 'acc.mp4', to8b(accs), fps=30, quality=8)
                 if args.mc_dropout:
-                    uncerts_color = color_error_image_func()(torch.Tensor(extras['uncerts']))
-                    uncerts_color = uncerts_color.cpu().numpy()
-                    imageio.mimwrite(moviebase + 'uncert_color.mp4', to8b(uncerts_color), fps=30, quality=8)
+                    mcs_color = color_error_image_func()(torch.Tensor(extras['mcs']))
+                    mcs_color = mcs_color.cpu().numpy()
+                    imageio.mimwrite(moviebase + 'mc_color.mp4', to8b(mcs_color), fps=30, quality=8)
             # imageio.mimwrite(moviebase + 'entropy.mp4', to8b(entropy_maps / np.nanmax(entropy_maps)), fps=30, quality=8)
             # imageio.mimwrite(moviebase + 'errors.mp4', to8b(errors.cpu().numpy()), fps=30, quality=8)
 
@@ -892,11 +894,11 @@ def train():
             # test_mse = test_mse.cpu()
             # logger.add_histogram('TEST/errors',test_mse,global_step)
             if args.mc_dropout:
-                test_uncerts = test_extras['uncerts']
-                test_uncerts_color = color_error_image_func()(torch.Tensor(test_uncerts))
-                test_uncerts_color = test_uncerts_color.cpu().numpy()
-                test_sigma2 = test_uncerts.flatten()
-                logger.add_image('TEST/uncert', to8b(test_uncerts_color[handout_id]), global_step, dataformats='HWC')
+                test_mcs = test_extras['mcs']
+                test_mcs_color = color_error_image_func()(torch.Tensor(test_mcs))
+                test_mcs_color = test_mcs_color.cpu().numpy()
+                test_sigma2 = test_mcs.flatten()
+                logger.add_image('TEST/mc', to8b(test_mcs_color[handout_id]), global_step, dataformats='HWC')
                 # logger.add_histogram('TEST/uncerts',test_sigma2, global_step)
 
 
@@ -926,9 +928,9 @@ def train():
                 # entropy_filename = os.path.join(testsavedir, 'entropy_{:03d}.png'.format(n))
                 # imageio.imwrite(entropy_filename, entropy8)
                 if args.mc_dropout:
-                    uncet8 = to8b(test_uncerts_color[n])
-                    uncert_filename = os.path.join(testsavedir, 'uncert_{:03d}.png'.format(n))
-                    imageio.imwrite(uncert_filename, uncet8)
+                    mc8 = to8b(test_mcs_color[n])
+                    mc_filename = os.path.join(testsavedir, 'mc_{:03d}.png'.format(n))
+                    imageio.imwrite(mc_filename, mc8)
 
             if args.eval_only or i==args.N_iters:
                 outputsavedir = os.path.join(testsavedir, 'rawoutput')
@@ -938,7 +940,7 @@ def train():
                 np.save(os.path.join(outputsavedir,'test_errors'),test_errors.cpu().numpy())
                 np.save(os.path.join(outputsavedir, 'test_jacobs'), test_jacobs)
                 if args.mc_dropout:
-                    np.save(os.path.join(outputsavedir,'test_uncerts'),test_uncerts)
+                    np.save(os.path.join(outputsavedir,'test_mcs'),test_mcs)
 
             print('Saved test set')
 
