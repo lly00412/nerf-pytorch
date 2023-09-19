@@ -15,11 +15,12 @@ def main():
     parser.add_argument('--gt', type=str, default='errors', help='ground truth baseline for optimal roc')
     parser.add_argument('--est', type=str, default=['uncerts'],nargs='+', help='sorted scores for estimated roc')
     parser.add_argument('--savedir', type=str, default='auc', help='where to save the logs')
+    parser.add_argument('--metric', type=str, default=['auc'], nargs='+', help='evaluation metric for quantative results')
     args = parser.parse_args()
 
     datasvaedir = os.path.join(args.basedir, args.expname, 'testset_{:06d}'.format(args.iter),'rawoutput')
-    gt_file = os.path.join(datasvaedir,'test_{}.npy'.format(args.gt))
-    test_gt = np.load(gt_file,allow_pickle=True)
+    err_gt_file = os.path.join(datasvaedir,'test_{}.npy'.format(args.gt))
+    test_err_gt = np.load(err_gt_file,allow_pickle=True)
 
     logdir = os.path.join(args.basedir, args.savedir)
     os.makedirs(logdir, exist_ok=True)
@@ -29,12 +30,12 @@ def main():
     means = {}
     stds = {}
 
-    n_samples = test_gt.shape[0]
+    n_samples = test_err_gt.shape[0]
     for est_var in args.est:
         ROC_opt[est_var] = []
         ROC_est[est_var] = []
         for i in range(n_samples):
-            gts = test_gt[i].flatten()
+            gts = test_err_gt[i].flatten()
             est_file = os.path.join(datasvaedir, 'test_{}.npy'.format(est_var))
             test_est = np.load(est_file, allow_pickle=True)
             means[est_var] = np.mean(test_est)
@@ -48,6 +49,17 @@ def main():
         ROC_est[est_var] = np.stack(ROC_est[est_var], 0)
         ROC_opt[est_var] = ROC_opt[est_var].mean(axis=0)
         ROC_est[est_var] = ROC_est[est_var].mean(axis=0)
+
+    metric = {}
+    test_rgbs = np.load(os.path.join(datasvaedir,'test_rgbs.npy'),allow_pickle=True)
+    test_gts = np.load(os.path.join(datasvaedir,'test_gts.npy'),allow_pickle=True)
+    mse = img2mse(test_rgbs, test_gts)
+    if 'psnr' in args.metric:
+        metric['psnr'] = mse2psnr(mse)
+    if 'ssim' in args.metric:
+        metric['ssim'] = img2ssim(test_rgbs, test_gts)
+    if 'lpips' in args.metric:
+        metric['lpips'] = img2lpips(test_rgbs, test_gts)
 
     figdir = os.path.join(logdir,args.expname)
     os.makedirs(figdir, exist_ok=True)
@@ -72,16 +84,18 @@ def main():
     table.field_names = ['item', 'value']
     table.add_row(['Expname',args.expname])
     table.add_row(['Test Samples', n_samples])
-    table.add_row(['{}(avg)'.format(args.gt), '{:.4f}'.format(np.mean(test_gt))])
-    table.add_row(['{}(std)'.format(args.gt),'{:.4f}'.format(np.std(test_gt))])
+    table.add_row(['{}(avg)'.format(args.gt), '{:.4f}'.format(np.mean(test_err_gt))])
+    table.add_row(['{}(std)'.format(args.gt),'{:.4f}'.format(np.std(test_err_gt))])
     for est_var in args.est:
         table.add_row(['{}(avg)'.format(est_var), '{:.4f}'.format(means[est_var])])
         table.add_row(['{}(std)'.format(est_var), '{:.4f}'.format(stds[est_var])])
         table.add_row(['AUC_est', '{:.6f}'.format(auc(ROC_est[est_var]))])
     table.add_row(['AUC_opt', '{:.6f}'.format(auc(ROC_opt[est_var]))])
+    for eval_metric in args.metric:
+        table.add_row([eval_metric, '{:.4f}'.format(metric[eval_metric])])
     print(table)
 
-    txt_file = os.path.join(logdir,'auc_{}.txt'.format(args.expname))
+    txt_file = os.path.join(logdir,'eval_{}.txt'.format(args.expname))
     with open(txt_file,'a') as f:
         f.write(str(table))
         f.write('\n')

@@ -939,6 +939,7 @@ def train():
                 np.save(os.path.join(outputsavedir,'test_disps'), test_disps)
                 np.save(os.path.join(outputsavedir,'test_errors'),test_errors.cpu().numpy())
                 np.save(os.path.join(outputsavedir, 'test_jacobs'), test_jacobs)
+                np.save(os.path.join(outputsavedir, 'test_gts'), images[i_test].cpu().numpy())
                 if args.mc_dropout:
                     np.save(os.path.join(outputsavedir,'test_mcs'),test_mcs)
 

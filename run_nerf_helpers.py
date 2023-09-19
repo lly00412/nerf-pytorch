@@ -5,7 +5,6 @@ import torch.nn.functional as F
 import numpy as np
 from pytorch_msssim import ssim, ms_ssim
 
-
 # Misc
 img2mse = lambda x, y : torch.mean((x - y) ** 2)
 mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.Tensor([10.]))

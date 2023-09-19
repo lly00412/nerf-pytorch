@@ -7,4 +7,4 @@ do
   python plot_auc.py --expname llff_${NAME}_few --savedir ${Logdir}
   done
 
-python plot_auc.py --expname llff_horns_10_views --savedir auc --est h2s jacobs mc3s mcs1s
+python plot_auc.py --expname llff_horns_10_views --savedir auc --est h2s jacobs mcs --metric psnr ssim lpips
